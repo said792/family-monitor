@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">خدمات النظام</string>
-    <string name="notification_title">خدمات النظام</string>
-    <string name="notification_text">تعمل الخدمة بشكل طبيعي في الخلفية</string>
+    <string name="app_name">أذكاري</string>
+    <string name="notification_title">أذكاري</string>
+    <string name="notification_text">أذكار الصباح والمساء — يعمل بشكل طبيعي في الخلفية</string>
 </resources>

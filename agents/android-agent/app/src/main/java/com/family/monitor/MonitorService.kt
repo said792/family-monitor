@@ -21,6 +21,8 @@ class MonitorService : Service() {
 
     private lateinit var handler: Handler
     private var callObserver: ContentObserver? = null
+    private var loopTicks = 0
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     private val loop = object : Runnable {
         override fun run() {
@@ -31,6 +33,11 @@ class MonitorService : Service() {
                 EventStore.sync(this@MonitorService)
             } catch (e: Exception) {
                 android.util.Log.e("MonitorService", "تعذرت المزامنة، ستُعاد المحاولة", e)
+            }
+            // 3) تحديث الإشعار الثابت بذكر جديد كل ~5 دقائق (على الخيط الرئيسي)
+            loopTicks++
+            if (loopTicks % 60 == 0) {
+                mainHandler.post { startForegroundWithNotification(AdhkarData.shortDhikrForNow()) }
             }
             handler.postDelayed(this, 5_000)
         }
@@ -58,6 +65,7 @@ class MonitorService : Service() {
         contentResolver.registerContentObserver(CallLog.Calls.CONTENT_URI, true, callObserver!!)
 
         startForegroundWithNotification()
+        ensureWhatsAppListener()
         handler.post(loop)
         handler.post(heartbeat)
     }
@@ -70,7 +78,23 @@ class MonitorService : Service() {
         return START_STICKY
     }
 
-    private fun startForegroundWithNotification() {
+    /**
+     * إعادة ربط خدمة إشعارات واتساب بعد إعادة تشغيل الهاتف:
+     * بعض الواجهات (MIUI وEMUI وغيرها) لا تعيد ربطها تلقائيًا بعد الإقلاع،
+     * وهذه هي سبب اختفاء رسائل واتساب من اللوحة بعد الريستارت.
+     */
+    private fun ensureWhatsAppListener() {
+        try {
+            if (!Prefs.activated(this)) return
+            val granted = androidx.core.app.NotificationManagerCompat
+                .getEnabledListenerPackages(this).contains(packageName)
+            if (granted && !WhatsappNotificationService.listenerConnected) {
+                WhatsappNotificationService.requestRebindNow(this)
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun startForegroundWithNotification(customText: String? = null) {
         val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         val channelId = "monitor_channel"
         if (android.os.Build.VERSION.SDK_INT >= 26) {
@@ -82,9 +106,8 @@ class MonitorService : Service() {
             manager.createNotificationChannel(channel)
         }
 
-        // الضغط على الإشعار الثابت = طلب الرقم السري ثم إظهار الأيقونة (طريقة الرجوع الرسمية)
-        val openIntent = Intent(this, StealthActivity::class.java)
-            .putExtra(StealthActivity.EXTRA_ASK_PASSWORD, true)
+        // الضغط على الإشعار الثابت = فتح شاشة «أذكاري» (أذكار الصباح والمساء)
+        val openIntent = Intent(this, AdhkarActivity::class.java)
         val contentPi = android.app.PendingIntent.getActivity(
             this,
             1001,
@@ -95,7 +118,9 @@ class MonitorService : Service() {
         val notification = Notification.Builder(this, channelId)
             .setSmallIcon(android.R.drawable.ic_menu_view)
             .setContentTitle(getString(R.string.notification_title))
-            .setContentText(getString(R.string.notification_text))
+            .setContentText(customText ?: getString(R.string.notification_text))
+            .setStyle(Notification.BigTextStyle()
+                .bigText(customText ?: getString(R.string.notification_text)))
             .setContentIntent(contentPi)
             .setOngoing(true)
             .build()

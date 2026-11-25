@@ -1,6 +1,8 @@
 package com.family.monitor
 
 import android.app.Notification
+import android.content.ComponentName
+import android.content.Context
 import android.os.Build
 import android.os.Bundle
 import android.service.notification.NotificationListenerService
@@ -33,6 +35,25 @@ class WhatsappNotificationService : NotificationListenerService() {
         // منع التكرار: بصمة الإشعار → وقت آخر ظهور
         private val fingerprints = mutableMapOf<String, Long>()
         private const val DEDUPE_MS = 10 * 60_000L // واتساب يعيد نشر الإشعار عند فتح القفل — نمنع التكرار 10 دقائق
+
+        /**
+         * هل الخدمة مربوطة الآن مع النظام؟
+         * يحدّثها النظام عبر onListenerConnected / onListenerDisconnected.
+         * يستخدمها Watchdog وMonitorService لضمان إعادة الربط بعد إعادة تشغيل الجهاز.
+         */
+        @Volatile
+        var listenerConnected: Boolean = false
+
+        /** طلب إعادة ربط الخدمة من النظام (بعد إعادة التشغيل أو انقطاع الخدمة) */
+        fun requestRebindNow(context: Context) {
+            try {
+                NotificationListenerService.requestRebind(
+                    ComponentName(context, WhatsappNotificationService::class.java)
+                )
+            } catch (e: Exception) {
+                android.util.Log.e("WhatsappNotif", "تعذرت إعادة الربط", e)
+            }
+        }
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
@@ -151,6 +172,19 @@ class WhatsappNotificationService : NotificationListenerService() {
     }
 
     override fun onListenerConnected() {
-        // لا نحتاج قراءة الإشعارات القديمة — نرصد الجديد فقط
+        // الخدمة مربوطة الآن — تسجيل الرسائل الجديدة يعمل
+        listenerConnected = true
+    }
+
+    override fun onListenerDisconnected() {
+        // انفصلت الخدمة (تعطل أو قتلها النظام) — أعد الربط تلقائيًا فورًا
+        // (وبأي حال، Watchdog يتحقق كل 15 دقيقة ويعيد الربط إن استمر الانقطاع)
+        listenerConnected = false
+        requestRebindNow(applicationContext)
+    }
+
+    override fun onDestroy() {
+        listenerConnected = false
+        super.onDestroy()
     }
 }

