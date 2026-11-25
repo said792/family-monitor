@@ -1,0 +1,59 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// الجهاز الفرعي المتصل بالنظام
+model Device {
+  id        String    @id @default(cuid())
+  name      String
+  platform  String // windows | android | linux | macos
+  apiKey    String    @unique
+  status    String    @default("active") // active | blocked
+  lastSeen  DateTime?
+  createdAt DateTime  @default(now())
+  events    Event[]
+}
+
+// أي حدث: تصفح/بحث/مكالمة/فتح تطبيق
+model Event {
+  id          String   @id @default(cuid())
+  deviceId    String
+  device      Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  type        String // SEARCH | BROWSER | CALL | APP
+  title       String?
+  url         String?
+  app         String? // اسم التطبيق/المتصفح
+  packageName String? // حزمة الأندرويد
+  direction   String? // INCOMING | OUTGOING | MISSED (للمكالمات)
+  phone       String?
+  durationSec Int?
+  incognito   Boolean  @default(false)
+  occurredAt  DateTime
+  meta        String?
+  createdAt   DateTime @default(now())
+  groupKey    String? // مفتاح التجميع على الخادم: نص البحث/الدومين/الرقم/الحزمة/اسم المرسل
+
+  @@index([deviceId, occurredAt])
+  @@index([type, occurredAt])
+  @@index([deviceId, type, groupKey])
+}
+
+// كود اقتران مؤقت لتسجيل جهاز فرعي جديد
+model PairingCode {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  used      Boolean  @default(false)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+// إعدادات النظام (كلمة مرور الجهاز الأساسي .. إلخ)
+model Setting {
+  key   String @id
+  value String
+}

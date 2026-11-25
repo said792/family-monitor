@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "مراقبة التصفح الأسرية",
+  "description": "يرسل المواقع المفتوحة (حتى الوضع الخفي) إلى برنامج المراقبة المحلي على هذا الكمبيوتر",
+  "version": "1.0.0",
+  "permissions": ["tabs", "alarms"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "48": "icon.png"
+  }
+}

