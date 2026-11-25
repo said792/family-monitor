@@ -61,16 +61,16 @@ export function StatsCards({ stats }: { stats: Stats | null }) {
           accent="bg-rose-100 text-rose-700"
         />
         <StatCard
-          icon={MessageCircle}
-          label="رسائل واتساب اليوم"
-          value={stats?.todayWhatsapp ?? "—"}
-          accent="bg-green-100 text-green-700"
-        />
-        <StatCard
           icon={Grid3X3}
           label="فتح تطبيقات اليوم"
           value={stats?.todayApps ?? "—"}
           accent="bg-violet-100 text-violet-700"
+        />
+        <StatCard
+          icon={MessageCircle}
+          label="رسائل واتساب اليوم"
+          value={stats?.todayWhatsapp ?? "—"}
+          accent="bg-emerald-100 text-emerald-700"
         />
       </div>
 

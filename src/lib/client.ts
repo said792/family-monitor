@@ -26,29 +26,8 @@ export interface EventRow {
   durationSec: number | null;
   incognito: boolean;
   occurredAt: string;
-  meta?: string | null;
-  device?: { name: string; platform: string };
-}
-
-/** مجموعة مجمّعة على الخادم: نص البحث/الرقم/المرسل + عدد السجلات داخلها */
-export interface GroupRow {
-  groupKey: string;
-  count: number;
-  lastAt: string;
-  sample: {
-    id: string;
-    type: EventType;
-    title: string | null;
-    url: string | null;
-    app: string | null;
-    packageName: string | null;
-    phone: string | null;
-    direction: string | null;
-    durationSec: number | null;
-    incognito: boolean;
-    occurredAt: string;
-    meta: string | null;
-  } | null;
+  meta: string | null;
+  device: { name: string; platform: string };
 }
 
 export interface Stats {

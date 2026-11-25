@@ -12,11 +12,6 @@ object UsageTracker {
     private var lastQueryEnd = System.currentTimeMillis() - 15_000
     private val knownPackages = mutableSetOf<String>()
 
-    /**
-     * المتصفحات المعروفة لا تُسجَّل في أحداث التطبيقات (توفير):
-     * فتح المتصفح يظهر تلقائيًا ضمن عمليات البحث والتصفح نفسها،
-     * فتسجيله في التطبيقات تكرار بلا فائدة يستهلك مساحة.
-     */
     fun poll(ctx: Context) {
         try {
             val usm = ctx.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
@@ -33,10 +28,8 @@ object UsageTracker {
                     else -> false
                 }
                 if (isForeground && ev.packageName.isNotBlank()) {
-                    // توفير: فتح المتصفحات المعروفة لا يُسجَّل (تفاصيله في البحث/التصفح)
-                    if (Config.isKnownBrowser(ev.packageName)) continue
-                    // لا نسجّل فتح تطبيق المراقبة نفسه
-                    if (ev.packageName == "com.family.monitor") continue
+                    // استثناء المتصفحات: نشاطها يُسجل في تبويب «بحث وتصفح» بدقة أعلى
+                    if (Config.isBrowser(ev.packageName)) continue
                     // حدث واحد لكل فتح تطبيق (وليس كل انتقال بين نوافذ التطبيق نفسه)
                     if (knownPackages.add(ev.packageName + ":" + ev.timeStamp / 3000)) {
                         val json = org.json.JSONObject()

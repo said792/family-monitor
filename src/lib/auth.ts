@@ -106,7 +106,7 @@ export async function authenticateDevice(req: Request) {
 const SEARCH_ENGINES: { pattern: RegExp; param: string; name: string }[] = [
   { pattern: /https?:\/\/(www\.)?google\.[a-z.]+\/search/i, param: "q", name: "Google" },
   { pattern: /https?:\/\/(www\.)?bing\.com\/search/i, param: "q", name: "Bing" },
-  { pattern: /https?:\/\/duckduckgo\.com/i, param: "q", name: "DuckDuckGo" },
+  { pattern: /https?:\/\/(www\.)?duckduckgo\.com/i, param: "q", name: "DuckDuckGo" },
   { pattern: /https?:\/\/search\.yahoo\.com/i, param: "p", name: "Yahoo" },
   { pattern: /https?:\/\/(www\.)?yandex\.[a-z.]+\/search/i, param: "text", name: "Yandex" },
   { pattern: /https?:\/\/(www\.)?baidu\.com\/s/i, param: "wd", name: "Baidu" },
@@ -130,95 +130,4 @@ export function classifySearch(url: string): { isSearch: boolean; query: string 
     }
   }
   return { isSearch: false, query: null, engine: null };
-}
-
-// ---------- المتصفحات المعروفة (تُستثنى من أحداث «التطبيقات» لتوفير المساحة) ----------
-
-export const KNOWN_BROWSERS = new Set([
-  "com.android.chrome", // Chrome
-  "com.chrome.beta",
-  "com.chrome.dev",
-  "com.chrome.canary",
-  "com.google.android.googlequicksearchbox", // تطبيق بحث جوجل (يشغل كروم أيضًا)
-  "org.mozilla.firefox", // Firefox
-  "org.mozilla.focus",
-  "org.mozilla.fenix",
-  "com.microsoft.emmx", // Edge
-  "com.opera.browser", // Opera
-  "com.opera.mini",
-  "com.opera.touch",
-  "com.brave.browser", // Brave
-  "com.sec.android.app.sbrowser", // Samsung Internet
-  "com.sec.android.app.sbrowser.beta",
-  "com.android.browser", // متصفح الأندرويد القديم
-  "com.android.browser.beta",
-  "com.ucbrowser.international", // UC
-  "com.UCMobile.intl",
-  "com.vivaldi.browser", // Vivaldi
-  "org.torproject.torbrowser", // Tor
-  "com.duckduckgo.mobile.android", // DuckDuckGo
-  "com.yandex.browser", // Yandex
-  "com.kiwibrowser.browser", // Kiwi
-  "com.ecosia.android", // Ecosia
-  "com.naver.whale", // Whale
-  "com.cookiegames.smartcookie", // SmartCookieWeb
-  "org.waterfox.project.waterfox", // Waterfox
-  "com.linkbubble.playstore", // LinkBubble
-  "mark.via.gp", // Via
-  "com.mmbox.browser",
-  "com.ghostery.android.ghostery",
-  "org.mozilla.klar",
-  "com.tencent.mm.browser",
-]);
-
-/** هل الحزمة متصفح معروف؟ (فتح المتصفح يظهر تلقائيًا ضمن عمليات البحث فلا نكرره) */
-export function isKnownBrowser(packageName: string | null | undefined): boolean {
-  if (!packageName) return false;
-  return KNOWN_BROWSERS.has(packageName.toLowerCase().trim());
-}
-
-// ---------- مفتاح التجميع الموحد (نفس منطق migration-v1.4-groupkey.sql) ----------
-
-function domainOf(url: string | null): string | null {
-  if (!url) return null;
-  const m = url.match(/\/\/([^/#?]+)/);
-  return m ? m[1].replace(/^www\./i, "").toLowerCase() : null;
-}
-
-/**
- * مفتاح التجميع الموحّد لكل الأنواع:
- * SEARCH   → نص البحث نفسه (أو الدومين إن لم يتوفر)
- * BROWSER  → دومين الموقع بدون www
- * CALL     → رقم الهاتف (أرقام فقط)
- * WHATSAPP → اسم المرسل/المحادثة
- * APP      → اسم حزمة التطبيق
- */
-export function computeGroupKey(type: string, ev: { title?: string | null; url?: string | null; phone?: string | null; packageName?: string | null; app?: string | null }): string | null {
-  switch (type) {
-    case "SEARCH": {
-      const t = (ev.title ?? "").trim().toLowerCase();
-      if (t) return t;
-      const d = domainOf(ev.url ?? null);
-      if (d) return d;
-      return (ev.url ?? "").trim().toLowerCase() || null;
-    }
-    case "BROWSER": {
-      const d = domainOf(ev.url ?? null);
-      if (d) return d;
-      return (ev.url ?? "").trim().toLowerCase() || null;
-    }
-    case "CALL": {
-      const digits = (ev.phone ?? "").replace(/[^\d+]/g, "");
-      return digits || ev.phone || null;
-    }
-    case "WHATSAPP": {
-      const t = (ev.title ?? "").trim();
-      return t || null;
-    }
-    case "APP": {
-      return (ev.packageName ?? "").trim() || (ev.app ?? "").trim() || null;
-    }
-    default:
-      return null;
-  }
 }

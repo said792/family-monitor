@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { authenticateDevice, classifySearch, computeGroupKey, isKnownBrowser } from "@/lib/auth";
+import { authenticateDevice, classifySearch } from "@/lib/auth";
 
 type IncomingEvent = {
   type?: string; // SEARCH | BROWSER | CALL | APP | WHATSAPP (SEARCH سيتم استنتاجه تلقائيًا للروابط)
@@ -17,18 +17,11 @@ type IncomingEvent = {
 };
 
 const ALLOWED_DIRECTIONS = ["INCOMING", "OUTGOING", "MISSED"];
-const ALLOWED_TYPES = ["SEARCH", "BROWSER", "CALL", "APP", "WHATSAPP"];
 
 /**
  * رفع دفعة أحداث من الجهاز الفرعي.
  * Header: X-Device-Key
  * Body: { events: [...] } — حتى 500 حدث في الدفعة
- *
- * ملاحظات:
- * - كل الأحداث تُخزَّن كاملة (لا يوجد حذف تلقائي ولا تقليم) — الحذف للأدمن فقط.
- * - أحداث فتح المتصفحات المعروفة (كروم وغيره) تُهمل هنا: فتح المتصفح يظهر
- *   تلقائيًا ضمن عمليات البحث نفسها، فلا داعي لتسجيله في التطبيقات (توفير).
- * - لكل حدث يُحسب groupKey موحّد يُستخدم لتجميع السجلات على الخادم.
  */
 export async function POST(req: NextRequest) {
   const device = await authenticateDevice(req);
@@ -58,22 +51,12 @@ export async function POST(req: NextRequest) {
     incognito: boolean;
     occurredAt: Date;
     meta: string | null;
-    groupKey: string | null;
   }[] = [];
-
-  let skippedBrowsers = 0;
 
   for (const ev of events) {
     let type = (ev.type ?? "").toUpperCase();
-    let title = typeof ev.title === "string" && ev.title.trim() ? ev.title.slice(0, 300) : null;
+    let title = typeof ev.title === "string" ? ev.title.slice(0, 300) : null;
     const url = typeof ev.url === "string" && ev.url ? ev.url.slice(0, 2000) : null;
-    const packageName = typeof ev.packageName === "string" ? ev.packageName.slice(0, 150) : null;
-
-    // استثناء المتصفحات المعروفة من أحداث «فتح التطبيق» (البيانات نفسها تظهر في البحث/التصفح)
-    if (type === "APP" && isKnownBrowser(packageName ?? ev.app)) {
-      skippedBrowsers++;
-      continue;
-    }
 
     // تصنيف تلقائي: إذا كان رابط متصفح، نحدد إن كانت عملية بحث
     if (url && (type === "BROWSER" || type === "SEARCH" || type === "")) {
@@ -87,22 +70,20 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    if (!ALLOWED_TYPES.includes(type)) continue;
+    if (!["SEARCH", "BROWSER", "CALL", "APP", "WHATSAPP"].includes(type)) continue;
 
     const occurredAt =
       typeof ev.occurredAt === "string" && !isNaN(Date.parse(ev.occurredAt))
         ? new Date(ev.occurredAt)
         : new Date();
 
-    const meta = ev.meta ? JSON.stringify(ev.meta).slice(0, 4000) : null;
-
-    const row = {
+    rows.push({
       deviceId: device.id,
       type,
       title,
       url,
       app: typeof ev.app === "string" ? ev.app.slice(0, 120) : null,
-      packageName,
+      packageName: typeof ev.packageName === "string" ? ev.packageName.slice(0, 150) : null,
       direction:
         typeof ev.direction === "string" && ALLOWED_DIRECTIONS.includes(ev.direction)
           ? ev.direction
@@ -111,10 +92,8 @@ export async function POST(req: NextRequest) {
       durationSec: typeof ev.durationSec === "number" && ev.durationSec >= 0 ? Math.round(ev.durationSec) : null,
       incognito: ev.incognito === true,
       occurredAt,
-      meta,
-    };
-
-    rows.push({ ...row, groupKey: computeGroupKey(type, row) });
+      meta: ev.meta ? JSON.stringify(ev.meta).slice(0, 4000) : null,
+    });
   }
 
   if (rows.length > 0) {
@@ -125,5 +104,5 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  return NextResponse.json({ ok: true, stored: rows.length, skippedBrowsers });
+  return NextResponse.json({ ok: true, stored: rows.length });
 }

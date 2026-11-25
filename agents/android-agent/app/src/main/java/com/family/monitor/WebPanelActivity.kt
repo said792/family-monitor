@@ -60,8 +60,7 @@ class WebPanelActivity : AppCompatActivity() {
             hint = "رابط اللوحة (مثل: https://xxxx.vercel.app)"
             inputType = android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS or
                 android.text.InputType.TYPE_TEXT_VARIATION_URI
-            // الرابط محروق داخل التطبيق — يظهر معبأً تلقائيًا
-            setText(Prefs.panelUrl(this@WebPanelActivity) ?: Config.DEFAULT_PANEL_URL)
+            setText(Prefs.panelUrl(this@WebPanelActivity) ?: "")
         }
         layout.addView(etUrl)
 

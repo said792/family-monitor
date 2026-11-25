@@ -36,11 +36,9 @@ model Event {
   occurredAt  DateTime
   meta        String?
   createdAt   DateTime @default(now())
-  groupKey    String? // مفتاح التجميع على الخادم: نص البحث/الدومين/الرقم/الحزمة/اسم المرسل
 
   @@index([deviceId, occurredAt])
   @@index([type, occurredAt])
-  @@index([deviceId, type, groupKey])
 }
 
 // كود اقتران مؤقت لتسجيل جهاز فرعي جديد

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ShieldCheck, LogOut, Settings, Loader2, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { LoginView } from "@/components/dashboard/login-view";
@@ -8,7 +8,7 @@ import { StatsCards } from "@/components/dashboard/stats-cards";
 import { DevicesPanel } from "@/components/dashboard/devices-panel";
 import { EventsFeed } from "@/components/dashboard/events-feed";
 import { SettingsDialog } from "@/components/dashboard/settings-dialog";
-import { api, type DeviceInfo, type Stats } from "@/lib/client";
+import { api, type DeviceInfo, type EventRow, type Stats } from "@/lib/client";
 
 export default function Page() {
   const [loadingSession, setLoadingSession] = useState(true);
@@ -18,11 +18,20 @@ export default function Page() {
 
   const [stats, setStats] = useState<Stats | null>(null);
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
+  const [events, setEvents] = useState<EventRow[]>([]);
 
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
-  const [typeFilter, setTypeFilter] = useState("SEARCH_BROWSER");
+  const [typeFilter, setTypeFilter] = useState("ALL");
   const [query, setQuery] = useState("");
   const [live, setLive] = useState(true);
+  const [loadingFeed, setLoadingFeed] = useState(false);
+
+  const queryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+
+  // أثناء مرور المؤشر فوق قائمة السجلات نوقف التحديث المباشر مؤقتًا
+  // حتى لا تختفي الرابط/التفاصيل التي يشير إليها المؤشر
+  const feedHoverRef = useRef(false);
 
   // تحقق من الجلسة عند التحميل
   useEffect(() => {
@@ -34,6 +43,46 @@ export default function Page() {
       .catch(() => setAuthed(false))
       .finally(() => setLoadingSession(false));
   }, []);
+
+  // البحث مع مهلة قصيرة
+  useEffect(() => {
+    if (queryTimer.current) clearTimeout(queryTimer.current);
+    queryTimer.current = setTimeout(() => setDebouncedQuery(query), 400);
+    return () => {
+      if (queryTimer.current) clearTimeout(queryTimer.current);
+    };
+  }, [query]);
+
+  const refreshFeed = useCallback(async () => {
+    setLoadingFeed(true);
+    try {
+      const params = new URLSearchParams();
+      if (selectedDeviceId) params.set("deviceId", selectedDeviceId);
+      if (debouncedQuery) params.set("q", debouncedQuery);
+      if (typeFilter === "ALL") {
+        const r = await api<{ events: EventRow[] }>(`/api/admin/events?${params}`);
+        setEvents(r.events);
+      } else if (typeFilter === "SEARCH_BROWSER") {
+        // نجلب نوعي البحث والتصفح معًا ثم ندمج ونرتب
+        const [searchRes, browserRes] = await Promise.all([
+          api<{ events: EventRow[] }>(`/api/admin/events?${params}&type=SEARCH`),
+          api<{ events: EventRow[] }>(`/api/admin/events?${params}&type=BROWSER`),
+        ]);
+        const merged = [...searchRes.events, ...browserRes.events]
+          .sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime())
+          .slice(0, 200);
+        setEvents(merged);
+      } else {
+        params.set("type", typeFilter);
+        const r = await api<{ events: EventRow[] }>(`/api/admin/events?${params}`);
+        setEvents(r.events);
+      }
+    } catch {
+      /* تجاهل أخطاء التحديث المؤقتة */
+    } finally {
+      setLoadingFeed(false);
+    }
+  }, [selectedDeviceId, typeFilter, debouncedQuery]);
 
   const refreshAll = useCallback(async () => {
     try {
@@ -48,13 +97,23 @@ export default function Page() {
     }
   }, []);
 
-  // تحديث الإحصائيات والأجهزة دوريًا
+  // تحديث عند تغيير الفلاتر
+  useEffect(() => {
+    if (!authed) return;
+    refreshFeed();
+  }, [authed, refreshFeed]);
+
+  // التحديث المباشر كل 5 ثوانٍ — يتوقف مؤقتًا أثناء مرور المؤشر فوق القائمة
   useEffect(() => {
     if (!authed) return;
     refreshAll();
-    const id = setInterval(() => refreshAll(), 5000);
+    const id = setInterval(() => {
+      if (feedHoverRef.current) return;
+      refreshAll();
+      if (live) refreshFeed();
+    }, 5000);
     return () => clearInterval(id);
-  }, [authed, refreshAll]);
+  }, [authed, live, refreshAll, refreshFeed]);
 
   async function logout() {
     await api("/api/admin/logout", { method: "POST" }).catch(() => {});
@@ -141,14 +200,18 @@ export default function Page() {
             onSelect={setSelectedDeviceId}
           />
           <EventsFeed
-            deviceId={selectedDeviceId}
+            events={events}
             typeFilter={typeFilter}
             onTypeFilter={setTypeFilter}
             query={query}
             onQuery={setQuery}
             live={live}
             onLive={setLive}
-            onChanged={refreshAll}
+            loading={loadingFeed}
+            onRefresh={refreshFeed}
+            onHoverChange={(h) => {
+              feedHoverRef.current = h;
+            }}
           />
         </div>
       </main>
@@ -164,7 +227,10 @@ export default function Page() {
         open={showSettings}
         onOpenChange={setShowSettings}
         devices={devices}
-        onChanged={refreshAll}
+        onChanged={() => {
+          refreshAll();
+          refreshFeed();
+        }}
       />
     </div>
   );

@@ -36,16 +36,14 @@ create table if not exists "Event" (
   "durationSec" integer,                         -- مدة المكالمة بالثواني
   "incognito"   boolean not null default false,  -- هل كان التصفح في الوضع الخفي؟
   "occurredAt"  timestamp(3) not null default now(),
-  "meta"        text,                            -- بيانات إضافية JSON (نص رسالة واتساب ...)
-  "groupKey"    text,                            -- مفتاح التجميع: نص البحث/الدومين/الرقم/المرسل/الحزمة
+  "meta"        text,                            -- بيانات إضافية JSON
   "createdAt"   timestamp(3) not null default now()
 );
 
--- الفهارس: السجلات تُقرأ دائمًا حسب الجهاز والوقت، أو النوع والوقت، أو التجميع
+-- الفهارس: السجلات تُقرأ دائمًا حسب الجهاز والوقت، أو النوع والوقت
 -- (نفس الأسماء والترتيب الذي ينشئه Prisma — توافق كامل بدون انزياح)
 create index if not exists "Event_deviceId_occurredAt_idx" on "Event" ("deviceId", "occurredAt");
 create index if not exists "Event_type_occurredAt_idx"     on "Event" ("type", "occurredAt");
-create index if not exists "Event_deviceId_type_groupKey_idx" on "Event" ("deviceId", "type", "groupKey");
 
 -- ------------------------------------------------------------
 -- 3) جدول أكواد الاقتران (تسجيل أجهزة جديدة)

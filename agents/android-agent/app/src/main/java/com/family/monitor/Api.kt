@@ -78,29 +78,6 @@ object Api {
         return post(serverUrl, "/api/device/heartbeat", JSONObject(), deviceKey) != null
     }
 
-    /** التحقق من كلمة مرور الأدمن — يُستخدم من شاشة التمويه لفتح الإعدادات */
-    fun verifyPassword(serverUrl: String, password: String): Boolean {
-        val body = JSONObject().put("password", password)
-        return try {
-            val conn = URL(serverUrl.trimEnd('/') + "/api/admin/verify").openConnection() as HttpURLConnection
-            conn.requestMethod = "POST"
-            conn.connectTimeout = TIMEOUT
-            conn.readTimeout = TIMEOUT
-            conn.doOutput = true
-            conn.setRequestProperty("Content-Type", "application/json")
-            BufferedWriter(OutputStreamWriter(conn.outputStream, Charsets.UTF_8)).use { w ->
-                w.write(body.toString())
-            }
-            if (conn.responseCode in 200..299) {
-                val text = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-                JSONObject(text).optBoolean("ok", false)
-            } else false
-        } catch (e: Exception) {
-            android.util.Log.e("Api", "فشل التحقق من كلمة المرور", e)
-            false
-        }
-    }
-
     /** هل خدمة إمكانية الوصول مفعّلة لهذا التطبيق؟ */
     fun isAccessibilityEnabled(ctx: Context): Boolean {
         val expected = ctx.packageName + "/" + UrlAccessibilityService::class.java.canonicalName

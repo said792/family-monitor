@@ -11,8 +11,8 @@ android {
         applicationId = "com.family.monitor"
         minSdk = 24
         targetSdk = 34
-        versionCode = 6
-        versionName = "1.6"
+        versionCode = 10
+        versionName = "2.0"
     }
 
     signingConfigs {
@@ -37,10 +37,17 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+    lint {
+        // لا نوقف البناء على تحذيرات Lint (الصلاحيات الخاصة مثل QUERY_ALL_PACKAGES)
+        abortOnError = false
+        checkReleaseBuilds = false
+    }
 }
 
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
+    // الفحص الاحتياطي الدوري الذي يستمر بعد إعادة تشغيل الجهاز
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
 }
