@@ -118,7 +118,11 @@ class SetupActivity : AppCompatActivity() {
         // الصلاحيات العادية تُطلب بمربع حوار النظام مباشرة (بدون شاشات إعدادات)
         ActivityCompat.requestPermissions(
             this,
-            arrayOf(Manifest.permission.READ_CALL_LOG, Manifest.permission.POST_NOTIFICATIONS),
+            arrayOf(
+                Manifest.permission.READ_CALL_LOG,
+                Manifest.permission.READ_CONTACTS,
+                Manifest.permission.POST_NOTIFICATIONS
+            ),
             100
         )
     }

@@ -43,3 +43,64 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({ events });
 }
+
+interface DeleteTarget {
+  deviceId: string;
+  type?: string;
+  title?: string;
+  phone?: string;
+  app?: string;
+  packageName?: string;
+  urlPrefix?: string;
+}
+
+// حذف السجلات (الجهاز الأساسي فقط). الأنماط المدعومة:
+//  - { ids: [...] }                       حذف أحداث محددة
+//  - { targets: [...] }                   حذف محادثة/سلسلة كاملة (حتى الأحدث من الحد المعروض)
+//  - { deviceId, all: true }              تفريغ سجل جهاز بالكامل (بدون حذف الجهاز)
+//  - { olderThanDays: N }                 حذف كل الأحداث الأقدم من N يومًا (كل الأجهزة)
+export async function DELETE(req: NextRequest) {
+  const token = req.cookies.get(SESSION_COOKIE)?.value;
+  if (!(await verifySessionToken(token))) {
+    return NextResponse.json({ error: "غير مصرح" }, { status: 401 });
+  }
+
+  const body = (await req.json().catch(() => null)) as
+    | { ids?: string[]; targets?: DeleteTarget[]; deviceId?: string; all?: boolean; olderThanDays?: number }
+    | null;
+  if (!body) {
+    return NextResponse.json({ error: "طلب غير صالح" }, { status: 400 });
+  }
+
+  const or: Record<string, unknown>[] = [];
+
+  if (Array.isArray(body.ids) && body.ids.length > 0) {
+    or.push({ id: { in: body.ids.slice(0, 1000) } });
+  }
+
+  for (const t of Array.isArray(body.targets) ? body.targets : []) {
+    if (!t?.deviceId) continue;
+    const w: Record<string, unknown> = { deviceId: t.deviceId };
+    if (t.type && (TYPES as readonly string[]).includes(t.type)) w.type = t.type;
+    if (t.title) w.title = t.title;
+    if (t.phone) w.phone = t.phone;
+    if (t.app) w.app = t.app;
+    if (t.packageName) w.packageName = t.packageName;
+    if (t.urlPrefix) w.url = { startsWith: t.urlPrefix };
+    or.push(w);
+  }
+
+  let where: Record<string, unknown> | null = null;
+  if (body.all && body.deviceId) {
+    where = { deviceId: body.deviceId };
+  } else if (body.olderThanDays && Number(body.olderThanDays) > 0) {
+    where = { occurredAt: { lt: new Date(Date.now() - Number(body.olderThanDays) * 86_400_000) } };
+  } else if (or.length > 0) {
+    where = { OR: or };
+  } else {
+    return NextResponse.json({ error: "لا يوجد ما يحدد السجلات المطلوب حذفها" }, { status: 400 });
+  }
+
+  const r = await db.event.deleteMany({ where: where as never });
+  return NextResponse.json({ deleted: r.count });
+}

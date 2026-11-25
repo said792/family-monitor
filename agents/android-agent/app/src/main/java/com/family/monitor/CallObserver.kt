@@ -53,6 +53,12 @@ class CallObserver(private val context: Context, handler: Handler) : ContentObse
                         .put("durationSec", duration)
                         .put("app", "الهاتف")
                         .put("occurredAt", iso(date))
+                    // اسم صاحب الرقم من جهات الاتصال — الموقع يستخدمه لتجميع
+                    // مكالمات الشخص في مجلده مع رسائل واتسابه
+                    val contactName = lookupContactName(number)
+                    if (contactName.isNotBlank()) {
+                        json.put("meta", org.json.JSONObject().put("name", contactName).toString())
+                    }
                     EventStore.addEvent(context, json)
                 }
             }
@@ -60,6 +66,24 @@ class CallObserver(private val context: Context, handler: Handler) : ContentObse
             android.util.Log.e("CallObserver", "صلاحية READ_CALL_LOG غير ممنوحة", e)
         } catch (e: Exception) {
             android.util.Log.e("CallObserver", "خطأ في قراءة سجل المكالمات", e)
+        }
+    }
+
+    /** البحث عن اسم صاحب الرقم في جهات الاتصال (بدون الاسم يظل التجميع بالرقم) */
+    private fun lookupContactName(number: String): String {
+        return try {
+            if (number.isBlank() || number == "رقم غير معروف") return ""
+            val uri = android.provider.ContactsContract.PhoneLookup.CONTENT_FILTER_URI
+                .buildUpon().appendPath(number).build()
+            context.contentResolver.query(
+                uri,
+                arrayOf(android.provider.ContactsContract.PhoneLookup.DISPLAY_NAME),
+                null, null, null
+            )?.use { c -> if (c.moveToFirst()) c.getString(0)?.trim().orEmpty() else "" } ?: ""
+        } catch (_: SecurityException) {
+            "" // صلاحية جهات الاتصال غير ممنوحة — نكتفي بالرقم
+        } catch (_: Exception) {
+            ""
         }
     }
 

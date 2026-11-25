@@ -203,6 +203,7 @@ export default function Page() {
           />
           <EventsFeed
             events={events}
+            devices={devices}
             typeFilter={typeFilter}
             onTypeFilter={setTypeFilter}
             query={query}

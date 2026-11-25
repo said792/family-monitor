@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import {
   Search, Globe, Phone, Grid3X3, EyeOff, ArrowDownLeft, ArrowUpRight, PhoneMissed,
-  MessageCircle, Loader2, RefreshCw, ChevronDown, List, MessagesSquare,
+  MessageCircle, Loader2, RefreshCw, ChevronDown, List, MessagesSquare, Trash2,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,11 +13,16 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   formatClock,
   formatDateTime,
   formatDuration,
   prettyUrl,
   timeAgo,
+  type DeviceInfo,
   type EventRow,
 } from "@/lib/client";
 import { cn } from "@/lib/utils";
@@ -60,6 +65,9 @@ const ICON_STYLES: Record<string, string> = {
   WHATSAPP: "bg-emerald-100 text-emerald-700",
 };
 
+// أولوية لون المجلد عند دمج أكثر من نوع (واتساب ثم المكالمات ثم ...)
+const TYPE_PRIORITY = ["WHATSAPP", "CALL", "APP", "SEARCH_BROWSER", "SEARCH", "BROWSER"];
+
 // ---------- أدوات مساعدة ----------
 
 /** قراءة نص الرسالة واسم المرسل من حقل meta لأحداث واتساب */
@@ -77,6 +85,17 @@ function whatsMeta(meta: string | null): { text?: string; sender?: string; group
   }
 }
 
+/** اسم صاحب الرقم من meta أحداث المكالمات (يضيفه التطبيق من جهات الاتصال) */
+function callMetaName(meta: string | null): string {
+  if (!meta) return "";
+  try {
+    const o = JSON.parse(meta) as Record<string, unknown>;
+    return typeof o.name === "string" ? o.name : "";
+  } catch {
+    return "";
+  }
+}
+
 /** ملكية الموقع من الرابط (لتجميع البحث والتصفح) */
 function domainOf(url: string | null): string {
   if (!url) return "";
@@ -85,6 +104,13 @@ function domainOf(url: string | null): string {
   } catch {
     return "";
   }
+}
+
+/** سلسلة الأرقام المميزة للاسم — لمطابقة الرقم مع اسم جهة الاتصال */
+function identityOf(label: string): string {
+  const l = label.trim().toLowerCase();
+  const digits = l.match(/\d{7,}/);
+  return digits ? digits[0] : l;
 }
 
 /** السطر الثاني من كل صف: تفاصيل الحدث */
@@ -112,12 +138,11 @@ function groupOf(ev: EventRow): { key: string; type: string; label: string } {
         type: "WHATSAPP",
         label: ev.title || "غير معروف",
       };
-    case "CALL":
-      return {
-        key: `CALL|${ev.deviceId}|${ev.phone ?? "unknown"}`,
-        type: "CALL",
-        label: ev.phone || "رقم غير معروف",
-      };
+    case "CALL": {
+      const name = callMetaName(ev.meta);
+      const label = name || ev.phone || "رقم غير معروف";
+      return { key: `CALL|${ev.deviceId}|${label}`, type: "CALL", label };
+    }
     case "APP":
       return {
         key: `APP|${ev.deviceId}|${ev.packageName || ev.app || "?"}`,
@@ -146,6 +171,10 @@ interface EventGroup {
   key: string;
   type: string;
   label: string;
+  /** الأنواع الموجودة داخل المجلد (لعرض شارات متعددة عند الدمج) */
+  types: string[];
+  /** المجلد يخص موقعًا (للحذف بواسطة بادئة الرابط) */
+  domainGroup: boolean;
   events: EventRow[];
 }
 
@@ -185,7 +214,7 @@ function EventIcon({ ev }: { ev: EventRow }) {
 
 // ---------- عنصر داخل المحادثة/السلسلة ----------
 
-function ThreadItem({ ev }: { ev: EventRow }) {
+function ThreadItem({ ev, groupLabel }: { ev: EventRow; groupLabel: string }) {
   const whats = ev.type === "WHATSAPP" ? whatsMeta(ev.meta) : null;
   const isWeb = ev.type === "SEARCH" || ev.type === "BROWSER";
   const out = ev.direction === "OUTGOING";
@@ -194,14 +223,19 @@ function ThreadItem({ ev }: { ev: EventRow }) {
     <div
       className={cn(
         "rounded-lg px-3 py-2 text-right",
-        ev.type === "WHATSAPP"
-          ? out
-            ? "bg-sky-50"
-            : "bg-white"
-          : "bg-white"
+        ev.type === "WHATSAPP" ? (out ? "bg-sky-50" : "bg-white") : "bg-white"
       )}
     >
       <div className="flex items-center gap-2 flex-wrap">
+        {ev.type === "WHATSAPP" ? (
+          <Badge variant="secondary" className="text-[10px] bg-emerald-50 text-emerald-700 shrink-0">
+            واتساب
+          </Badge>
+        ) : ev.type === "CALL" ? (
+          <Badge variant="secondary" className="text-[10px] bg-rose-50 text-rose-700 shrink-0">
+            <Phone className="w-3 h-3" /> مكالمة
+          </Badge>
+        ) : null}
         <DirectionBadge ev={ev} />
         {whats?.group && (
           <Badge variant="secondary" className="text-[10px] bg-emerald-50 text-emerald-700 shrink-0">
@@ -210,6 +244,11 @@ function ThreadItem({ ev }: { ev: EventRow }) {
         )}
         {whats?.group && whats.sender && (
           <span className="text-[11px] font-medium text-slate-600 shrink-0">{whats.sender}</span>
+        )}
+        {ev.type === "CALL" && ev.phone && ev.phone !== groupLabel && (
+          <span className="text-[11px] text-slate-500 shrink-0" dir="ltr">
+            {ev.phone}
+          </span>
         )}
         {ev.incognito && (
           <Badge className="text-[10px] bg-slate-800 text-white gap-1 shrink-0">
@@ -222,6 +261,13 @@ function ThreadItem({ ev }: { ev: EventRow }) {
         <span className="text-[10px] text-slate-400 mr-auto shrink-0">
           {formatDateTime(ev.occurredAt)} · {formatClock(ev.occurredAt)}
         </span>
+        <button
+          onClick={(e) => deleteSingle(ev, e)}
+          className="text-slate-300 hover:text-red-500 transition-colors shrink-0"
+          title="حذف هذا الحدث"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+        </button>
       </div>
 
       {isWeb && ev.url ? (
@@ -250,6 +296,13 @@ function ThreadItem({ ev }: { ev: EventRow }) {
   );
 }
 
+// مرجع لدالة حذف حدث واحد — يُضبط من المكوّن الرئيسي
+let deleteSingleHandler: ((ev: EventRow, e: { stopPropagation: () => void }) => void) | null = null;
+function deleteSingle(ev: EventRow, e: { stopPropagation: () => void }) {
+  e.stopPropagation();
+  deleteSingleHandler?.(ev, e);
+}
+
 // ---------- لوحة المحادثة الموسعة ----------
 
 function ThreadPanel({ group }: { group: EventGroup }) {
@@ -260,11 +313,11 @@ function ThreadPanel({ group }: { group: EventGroup }) {
     <div className="mx-3 mb-2 rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-3 space-y-1.5">
       <div className="text-[11px] text-slate-500 flex items-center justify-between px-1">
         <span>
-          {GROUP_TYPES[group.type] ?? group.type} · {group.events.length} حدث — مرتبة من الأحدث للأقدم
+          {group.events.length} حدث — مرتبة من الأحدث للأقدم
         </span>
       </div>
       {items.map((ev) => (
-        <ThreadItem key={ev.id} ev={ev} />
+        <ThreadItem key={ev.id} ev={ev} groupLabel={group.label} />
       ))}
       {group.events.length > shown && (
         <Button variant="outline" size="sm" className="w-full h-8 text-xs" onClick={() => setShown(shown + 50)}>
@@ -275,16 +328,18 @@ function ThreadPanel({ group }: { group: EventGroup }) {
   );
 }
 
-// ---------- صف مجموعة ----------
+// ---------- صف مجموعة (مجلد) ----------
 
 function GroupRow({
   group,
   expanded,
   onToggle,
+  onDelete,
 }: {
   group: EventGroup;
   expanded: boolean;
   onToggle: () => void;
+  onDelete: () => void;
 }) {
   const last = group.events[0];
   const letter = group.label.trim().charAt(0) || "؟";
@@ -311,9 +366,15 @@ function GroupRow({
             <Badge variant="secondary" className="text-[10px] bg-slate-100 text-slate-600 shrink-0">
               {group.events.length} {group.events.length === 1 ? "حدث" : "أحداث"}
             </Badge>
-            <Badge variant="secondary" className="text-[10px] bg-white text-slate-500 border shrink-0">
-              {GROUP_TYPES[group.type] ?? group.type}
-            </Badge>
+            {group.types.map((t) => (
+              <Badge
+                key={t}
+                variant="secondary"
+                className="text-[10px] bg-white text-slate-500 border shrink-0"
+              >
+                {GROUP_TYPES[t] ?? TYPE_LABELS[t] ?? t}
+              </Badge>
+            ))}
           </div>
           <p className="text-xs text-slate-500 truncate mt-0.5" dir="auto" title={detailText(last) || undefined}>
             <DirectionIcon ev={last} /> {detailText(last) || "—"}
@@ -322,6 +383,16 @@ function GroupRow({
             {last.device.name} · {timeAgo(last.occurredAt)}
           </p>
         </div>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+          className="text-slate-300 hover:text-red-500 transition-colors shrink-0 p-1"
+          title="حذف هذا المجلد وكل محتواه"
+        >
+          <Trash2 className="w-4 h-4" />
+        </button>
         <ChevronDown
           className={cn("w-4 h-4 text-slate-400 shrink-0 transition-transform", expanded && "rotate-180")}
         />
@@ -344,7 +415,9 @@ function FlatRow({ ev }: { ev: EventRow }) {
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-sm font-medium text-slate-800 break-all" title={ev.title ?? undefined}>
-            {ev.type === "CALL" ? ev.phone ?? "رقم غير معروف" : ev.title ?? prettyUrl(ev.url ?? "") ?? "—"}
+            {ev.type === "CALL"
+              ? `${callMetaName(ev.meta) ? `${callMetaName(ev.meta)} — ` : ""}${ev.phone ?? "رقم غير معروف"}`
+              : ev.title ?? prettyUrl(ev.url ?? "") ?? "—"}
           </span>
           <Badge variant="secondary" className="text-[10px] bg-slate-100 text-slate-600 shrink-0">
             {TYPE_LABELS[ev.type] ?? ev.type}
@@ -396,6 +469,7 @@ function FlatRow({ ev }: { ev: EventRow }) {
 
 export function EventsFeed({
   events,
+  devices,
   typeFilter,
   onTypeFilter,
   query,
@@ -407,6 +481,7 @@ export function EventsFeed({
   onHoverChange,
 }: {
   events: EventRow[];
+  devices: DeviceInfo[];
   typeFilter: string;
   onTypeFilter: (t: string) => void;
   query: string;
@@ -417,9 +492,17 @@ export function EventsFeed({
   onRefresh: () => void;
   onHoverChange?: (hovering: boolean) => void;
 }) {
-  // وضع العرض: مجمّع (محادثة لكل شخص/رقم/تطبيق/موقع) أو قائمة مسطحة
+  // وضع العرض: مجمّع (مجلد لكل شخص/رقم/تطبيق/موقع) أو قائمة مسطحة
   const [mode, setMode] = useState<"grouped" | "flat">("grouped");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // طلب حذف قيد التأكيد: null = لا شيء | "shown" = المعروض | مجموعة | حدث واحد
+  const [confirmDel, setConfirmDel] = useState<
+    | { kind: "shown" }
+    | { kind: "group"; group: EventGroup }
+    | { kind: "item"; ev: EventRow }
+    | null
+  >(null);
+  const [deleting, setDeleting] = useState(false);
 
   const groups = useMemo(() => {
     const map = new Map<string, EventGroup>();
@@ -427,20 +510,42 @@ export function EventsFeed({
       const g = groupOf(ev);
       let grp = map.get(g.key);
       if (!grp) {
-        grp = { key: g.key, type: g.type, label: g.label, events: [] };
+        grp = { key: g.key, type: g.type, label: g.label, types: [g.type], domainGroup: false, events: [] };
         map.set(g.key, grp);
       }
       grp.events.push(ev);
     }
-    const list = [...map.values()];
-    for (const g of list) {
+    // دمج مجلدات الشخص نفسه عبر الأنواع: واتساب + مكالمات + ... لنفس الاسم/الرقم
+    const identity = new Map<string, EventGroup>();
+    const merged: EventGroup[] = [];
+    for (const grp of map.values()) {
+      if (!grp.domainGroup && grp.type === "SEARCH_BROWSER" && domainOf(grp.events[0]?.url ?? null)) {
+        grp.domainGroup = true;
+      }
+      const idKey = `${grp.events[0].deviceId}|${identityOf(grp.label)}`;
+      const existing = identity.get(idKey);
+      if (existing && existing !== grp) {
+        // دمج: واتساب «محمد» + مكالمات «محمد» = مجلد واحد
+        existing.events.push(...grp.events);
+        for (const t of grp.types) if (!existing.types.includes(t)) existing.types.push(t);
+        existing.events.sort(
+          (a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime()
+        );
+        // لون المجلد حسب الأولوية
+        existing.type = TYPE_PRIORITY.find((t) => existing.types.includes(t)) ?? existing.type;
+      } else if (!existing) {
+        identity.set(idKey, grp);
+        merged.push(grp);
+      }
+    }
+    for (const g of merged) {
       g.events.sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime());
     }
     // المجموعات مرتبة حسب آخر نشاط
-    list.sort(
+    merged.sort(
       (a, b) => new Date(b.events[0].occurredAt).getTime() - new Date(a.events[0].occurredAt).getTime()
     );
-    return list;
+    return merged;
   }, [events]);
 
   function toggleGroup(key: string) {
@@ -451,6 +556,90 @@ export function EventsFeed({
       return next;
     });
   }
+
+  // ---------- الحذف ----------
+
+  function groupDeletePayload(group: EventGroup): { ids: string[]; targets: Record<string, unknown>[] } {
+    const ids = group.events.map((e) => e.id);
+    const dev = group.events[0].deviceId;
+    const types = group.types;
+    const targets: Record<string, unknown>[] = [];
+    const numeric = group.label.match(/\d{7,}/)?.[0];
+    if (types.includes("WHATSAPP")) targets.push({ deviceId: dev, type: "WHATSAPP", title: group.label });
+    if (types.includes("CALL") && numeric) targets.push({ deviceId: dev, type: "CALL", phone: group.label });
+    if (types.includes("APP")) {
+      targets.push({ deviceId: dev, type: "APP", app: group.label });
+      for (const pkg of new Set(group.events.map((e) => e.packageName).filter(Boolean) as string[])) {
+        targets.push({ deviceId: dev, type: "APP", packageName: pkg });
+      }
+    }
+    if (group.domainGroup) {
+      for (const t of ["SEARCH", "BROWSER"]) {
+        targets.push({ deviceId: dev, type: t, urlPrefix: `https://${group.label}` });
+        targets.push({ deviceId: dev, type: t, urlPrefix: `https://www.${group.label}` });
+      }
+    }
+    return { ids, targets };
+  }
+
+  async function performDelete() {
+    if (!confirmDel) return;
+    setDeleting(true);
+    try {
+      let payload: Record<string, unknown> | null = null;
+      if (confirmDel.kind === "item") {
+        payload = { ids: [confirmDel.ev.id] };
+      } else if (confirmDel.kind === "group") {
+        payload = groupDeletePayload(confirmDel.group);
+      } else {
+        // «حذف السجلات المعروضة»: الجهاز المختار (أو كل الأجهزة) × تبويب العرض الحالي
+        const types =
+          typeFilter === "ALL"
+            ? null
+            : typeFilter === "SEARCH_BROWSER"
+              ? ["SEARCH", "BROWSER"]
+              : [typeFilter];
+        const devs = devices.length > 0 ? devices : [];
+        const targets = types
+          ? devs.flatMap((d) => types.map((t) => ({ deviceId: d.id, type: t })))
+          : devs.map((d) => ({ deviceId: d.id }));
+        payload = targets.length > 0 ? { targets } : { olderThanDays: 0 };
+      }
+      const res = await fetch("/api/admin/events", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        setConfirmDel(null);
+        onRefresh();
+      }
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  deleteSingleHandler = (ev, _e) => setConfirmDel({ kind: "item", ev });
+
+  const confirmText = (() => {
+    if (!confirmDel) return { title: "", desc: "" };
+    if (confirmDel.kind === "item") {
+      return { title: "حذف هذا الحدث؟", desc: "سيُحذف السجل نهائيًا ولا يمكن التراجع." };
+    }
+    if (confirmDel.kind === "group") {
+      return {
+        title: `حذف مجلد «${confirmDel.group.label}»؟`,
+        desc: `سيُحذف كل محتوى هذا المجلد (${confirmDel.group.events.length} حدث معروض + أي أحداث أقدم لنفس الشخص/الموقع) نهائيًا.`,
+      };
+    }
+    const scope =
+      typeFilter === "ALL" ? "كل الأنواع" : GROUP_TYPES[typeFilter] ?? TYPE_LABELS[typeFilter] ?? typeFilter;
+    const dev = devices.length === 1 ? `للجهاز «${devices[0].name}»` : "لكل الأجهزة";
+    return {
+      title: "حذف السجلات المعروضة؟",
+      desc: `سيُحذف ${scope} ${dev} حسب التبويب الحالي. البحث لا يحدّد الحذف. لا يمكن التراجع.`,
+    };
+  })();
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white overflow-hidden flex flex-col">
@@ -476,7 +665,7 @@ export function EventsFeed({
                   "h-8 px-2.5 flex items-center gap-1 text-xs transition-colors",
                   mode === "grouped" ? "bg-emerald-600 text-white" : "bg-white text-slate-600 hover:bg-slate-50"
                 )}
-                title="عرض مجمّع: محادثة لكل شخص"
+                title="عرض مجمّع: مجلد لكل شخص"
               >
                 <MessagesSquare className="w-3.5 h-3.5" />
                 مجمّع
@@ -503,6 +692,15 @@ export function EventsFeed({
             <Button variant="outline" size="sm" onClick={onRefresh} className="h-8 gap-1 text-xs">
               {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
               تحديث
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setConfirmDel({ kind: "shown" })}
+              className="h-8 gap-1 text-xs text-red-600 hover:text-red-700 hover:bg-red-50"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              حذف
             </Button>
           </div>
         </div>
@@ -536,6 +734,7 @@ export function EventsFeed({
                   group={g}
                   expanded={expanded.has(g.key)}
                   onToggle={() => toggleGroup(g.key)}
+                  onDelete={() => setConfirmDel({ kind: "group", group: g })}
                 />
               ))}
             </div>
@@ -551,10 +750,34 @@ export function EventsFeed({
       {events.length > 0 && (
         <div className="px-4 py-2 border-t border-slate-100 text-[11px] text-slate-400">
           {mode === "grouped"
-            ? `${events.length} حدث مجمّعة في ${groups.length} محادثة/سلسلة — اضغط على أي مجموعة لعرض كل محتواها.`
+            ? `${events.length} حدث مجمّعة في ${groups.length} مجلد — كل شخص/رقم في مجلد واحد يجمع واتسابه ومكالماته، اضغط عليه لعرض المحتوى.`
             : `آخر ${events.length} حدث — الأحداث تُسجل لحظة حدوثها على الجهاز الفرعي.`}
         </div>
       )}
+
+      {/* تأكيد الحذف */}
+      <AlertDialog open={confirmDel !== null} onOpenChange={(o) => !o && setConfirmDel(null)}>
+        <AlertDialogContent dir="rtl">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{confirmText.title}</AlertDialogTitle>
+            <AlertDialogDescription>{confirmText.desc}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel disabled={deleting}>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                performDelete();
+              }}
+              className="bg-red-600 hover:bg-red-500"
+              disabled={deleting}
+            >
+              {deleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4 ml-1" />}
+              حذف نهائي
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
