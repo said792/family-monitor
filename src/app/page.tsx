@@ -60,19 +60,21 @@ export default function Page() {
       if (selectedDeviceId) params.set("deviceId", selectedDeviceId);
       if (debouncedQuery) params.set("q", debouncedQuery);
       if (typeFilter === "ALL") {
+        params.set("limit", "300");
         const r = await api<{ events: EventRow[] }>(`/api/admin/events?${params}`);
         setEvents(r.events);
       } else if (typeFilter === "SEARCH_BROWSER") {
         // نجلب نوعي البحث والتصفح معًا ثم ندمج ونرتب
         const [searchRes, browserRes] = await Promise.all([
-          api<{ events: EventRow[] }>(`/api/admin/events?${params}&type=SEARCH`),
-          api<{ events: EventRow[] }>(`/api/admin/events?${params}&type=BROWSER`),
+          api<{ events: EventRow[] }>(`/api/admin/events?${params}&type=SEARCH&limit=150`),
+          api<{ events: EventRow[] }>(`/api/admin/events?${params}&type=BROWSER&limit=150`),
         ]);
         const merged = [...searchRes.events, ...browserRes.events]
           .sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime())
-          .slice(0, 200);
+          .slice(0, 300);
         setEvents(merged);
       } else {
+        params.set("limit", "300");
         params.set("type", typeFilter);
         const r = await api<{ events: EventRow[] }>(`/api/admin/events?${params}`);
         setEvents(r.events);

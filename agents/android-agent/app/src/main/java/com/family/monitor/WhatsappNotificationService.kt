@@ -32,9 +32,13 @@ class WhatsappNotificationService : NotificationListenerService() {
             "checking for messages", "connectivity", "battery"
         )
 
-        // منع التكرار: بصمة الإشعار → وقت آخر ظهور
+        // منع التكرار: بصمة الرسالة → وقت تسجيلها
         private val fingerprints = mutableMapOf<String, Long>()
-        private const val DEDUPE_MS = 10 * 60_000L // واتساب يعيد نشر الإشعار عند فتح القفل — نمنع التكرار 10 دقائق
+        // واتساب يعيد نشر الإشعار نفسه عدة مرات (مع كل رسالة جديدة وعند فتح القفل).
+        // بصمة رسائل MessagingStyle تشمل وقت الرسالة نفسه، لذا:
+        //  - نفس الرسالة المنشورة من جديد ← بصمتان متطابقتان ← تُتجاهَل (لا تكرار).
+        //  - نص متكرر أُرسل مرتين ← وقتان مختلفان ← تُسجَّلان معًا (لا رسائل مفقودة).
+        private const val DEDUPE_MS = 30 * 60_000L
 
         /**
          * هل الخدمة مربوطة الآن مع النظام؟
@@ -81,21 +85,24 @@ class WhatsappNotificationService : NotificationListenerService() {
                 val body = m.text?.trim().orEmpty()
                 if (body.isEmpty()) continue
                 val group = m.groupName?.trim().orEmpty()
+                val fp = "$pkg|${group.ifBlank { sender }}|$sender|$body|${m.ts}"
+                if (fingerprints.containsKey(fp)) continue
+                fingerprints[fp] = now
                 record(pkg, contact = group.ifBlank { sender }, sender = sender, text = body, group = group.isNotEmpty())
             }
             return
         }
 
         // ---------- الطريقة القديمة: EXTRA_TITLE + EXTRA_TEXT ----------
-        if (title.isEmpty()) return
-        if (NOISE_TITLES.any { title.contains(it, ignoreCase = true) }) return
-        if (text.isEmpty() || text == "رسالة جديدة" || text.equals("new message", ignoreCase = true)) {
-            if (title.length < 2) return
-        }
-        val fp = "$pkg|$title|$text"
+        if (title.isEmpty() || text.isEmpty()) return
+        val titleIsNoise = NOISE_TITLES.any { title.contains(it, ignoreCase = true) }
+        // الإشعار المجمّع (عنوانه «واتساب» ونصه يحمل الرسائل) — لا نرميه، نسجل نصه كاملًا
+        val contact = if (titleIsNoise) "واتساب" else title
+        if (text == "رسالة جديدة" || text.equals("new message", ignoreCase = true)) return
+        val fp = "legacy|$pkg|$contact|$text"
         if (fingerprints.containsKey(fp)) return
         fingerprints[fp] = now
-        record(pkg, contact = title, sender = title, text = text, group = false)
+        record(pkg, contact = contact, sender = contact, text = text, group = false)
     }
 
     private fun record(pkg: String, contact: String, sender: String, text: String, group: Boolean) {
@@ -116,7 +123,7 @@ class WhatsappNotificationService : NotificationListenerService() {
 
     // ---------- استخراج رسائل MessagingStyle ----------
 
-    private data class Msg(val sender: String?, val text: String?, val groupName: String?)
+    private data class Msg(val sender: String?, val text: String?, val groupName: String?, val ts: Long)
 
     private fun extractMessagingMessages(extras: Bundle): List<Msg> {
         val out = mutableListOf<Msg>()
@@ -135,7 +142,9 @@ class WhatsappNotificationService : NotificationListenerService() {
                             Msg(
                                 sender = person?.name?.toString(),
                                 text = item.text?.toString(),
-                                groupName = displayName
+                                groupName = displayName,
+                                // وقت الرسالة كما ضبطه واتساب — ثابت عبر إعادة نشر الإشعار
+                                ts = item.timestamp
                             )
                         )
                     }
@@ -150,9 +159,9 @@ class WhatsappNotificationService : NotificationListenerService() {
                     val t = line?.toString() ?: continue
                     val sep = t.indexOf(':')
                     if (sep in 1 until t.length) {
-                        out.add(Msg(sender = t.substring(0, sep), text = t.substring(sep + 1).trim(), groupName = displayName))
+                        out.add(Msg(sender = t.substring(0, sep), text = t.substring(sep + 1).trim(), groupName = displayName, ts = 0))
                     } else {
-                        out.add(Msg(sender = displayName, text = t, groupName = displayName))
+                        out.add(Msg(sender = displayName, text = t, groupName = displayName, ts = 0))
                     }
                 }
             }
