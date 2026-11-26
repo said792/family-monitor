@@ -22,12 +22,15 @@ class MonitorService : Service() {
     private lateinit var handler: Handler
     private var callObserver: ContentObserver? = null
     private var loopTicks = 0
+    private var lastDiagAt = 0L
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private val loop = object : Runnable {
         override fun run() {
             // 1) رصد فتح التطبيقات
             UsageTracker.poll(this@MonitorService)
+            // 1ب) رصد المحتوى المعروض داخل التطبيقات (ريلز/فيديوهات — عنوان كل مقطع ومرات دخوله)
+            MediaWatcher.poll(this@MonitorService)
             // 2) مزامنة الأحداث مع الخادم
             try {
                 EventStore.sync(this@MonitorService)
@@ -36,10 +39,67 @@ class MonitorService : Service() {
             }
             // 3) تحديث الإشعار الثابت بذكر جديد كل ~5 دقائق (على الخيط الرئيسي)
             loopTicks++
+            // 3أ) تأكيد الإصدار: حدث واحد عند أول تشغيل لكل نسخة جديدة حتى يتأكد
+            //     الأب من اللوحة أن الجهاز الفرعي يعمل بالنسخة المحدثة فعلاً
+            if (loopTicks == 1) {
+                val ver = try {
+                    packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
+                } catch (_: Exception) { "?" }
+                val diagPrefs = getSharedPreferences("diag", MODE_PRIVATE)
+                if (diagPrefs.getString("reportedVersion", "") != ver) {
+                    diagPrefs.edit().putString("reportedVersion", ver).apply()
+                    try {
+                        EventStore.addEvent(
+                            this@MonitorService,
+                            org.json.JSONObject()
+                                .put("type", "APP")
+                                .put("app", "معلومة إصدار")
+                                .put("packageName", "diagnostic")
+                                .put("title", "تشغيل الإصدار v$ver ✓ — الجهاز الفرعي يعمل بالنسخة المحدثة")
+                        )
+                    } catch (_: Exception) {}
+                }
+            }
             if (loopTicks % 60 == 0) {
                 mainHandler.post { startForegroundWithNotification(AdhkarData.shortDhikrForNow()) }
             }
+            // 4) تشخيص الخدمات: لو خدمة أساسية معطلة ننبه بمربع في اللوحة
+            //    (بعد 5 دقائق من بدء التشغيل، ومرة كل 6 ساعات كحد أقصى)
+            if (loopTicks > 60 && System.currentTimeMillis() - lastDiagAt > 6 * 3600_000L) {
+                val diag = when {
+                    !isAccessibilityEnabled() ->
+                        "خدمة إمكانية الوصول غير مفعلة — الرسائل الصادرة ومحتوى فيسبوك (الريلز والروابط) لن تُرصد. الحل: إعدادات الهاتف → إمكانية الوصول → تفعيل FamilyMonitor"
+                    !WhatsappNotificationService.listenerConnected ->
+                        "خدمة قراءة الإشعارات غير مفعلة — رسائل واتساب وماسنجر الواردة لن تُرصد. الحل: إعدادات الهاتف → الوصول إلى الإشعارات → تفعيل FamilyMonitor"
+                    else -> null
+                }
+                if (diag != null) {
+                    lastDiagAt = System.currentTimeMillis()
+                    try {
+                        EventStore.addEvent(
+                            this@MonitorService,
+                            org.json.JSONObject()
+                                .put("type", "APP")
+                                .put("app", "تنبيه صيانة")
+                                .put("packageName", "diagnostic")
+                                .put("title", diag)
+                        )
+                    } catch (_: Exception) {}
+                }
+            }
             handler.postDelayed(this, 5_000)
+        }
+    }
+
+    /** هل خدمة إمكانية الوصول مفعلة؟ (الرسائل الصادرة ومحتوى فيسبوك تعتمد عليها) */
+    private fun isAccessibilityEnabled(): Boolean {
+        return try {
+            val s = android.provider.Settings.Secure.getString(
+                contentResolver, android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            ) ?: return false
+            s.contains("com.family.monitor", ignoreCase = true)
+        } catch (_: Exception) {
+            true // عند عدم القدرة على الفحص نفترض أنها مفعلة حتى لا نزعج المستخدم
         }
     }
 

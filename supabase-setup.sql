@@ -26,7 +26,7 @@ create table if not exists "Device" (
 create table if not exists "Event" (
   "id"          text primary key default gen_random_uuid()::text,
   "deviceId"    text not null references "Device"("id") on delete cascade,
-  "type"        text not null,                   -- SEARCH | BROWSER | CALL | APP
+  "type"        text not null,                   -- SEARCH | BROWSER | CALL | APP | WHATSAPP | MESSENGER | MEDIA
   "title"       text,                            -- نص البحث / عنوان الصفحة / اسم التطبيق
   "url"         text,
   "app"         text,                            -- اسم المتصفح أو التطبيق
@@ -44,6 +44,7 @@ create table if not exists "Event" (
 -- (نفس الأسماء والترتيب الذي ينشئه Prisma — توافق كامل بدون انزياح)
 create index if not exists "Event_deviceId_occurredAt_idx" on "Event" ("deviceId", "occurredAt");
 create index if not exists "Event_type_occurredAt_idx"     on "Event" ("type", "occurredAt");
+create index if not exists "Event_occurredAt_idx"          on "Event" ("occurredAt");
 
 -- ------------------------------------------------------------
 -- 3) جدول أكواد الاقتران (تسجيل أجهزة جديدة)

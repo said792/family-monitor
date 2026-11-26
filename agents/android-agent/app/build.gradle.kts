@@ -11,8 +11,8 @@ android {
         applicationId = "com.family.monitor"
         minSdk = 24
         targetSdk = 34
-        versionCode = 13
-        versionName = "2.3"
+        versionCode = 16
+        versionName = "2.5.1"
     }
 
     signingConfigs {

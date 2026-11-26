@@ -36,6 +36,17 @@ class AdhkarActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // بعد تحديث التطبيق فوق نسخة قديمة: الصلاحيات المضافة حديثًا (جهات الاتصال
+        // — لأسماء المكالمات) لا تُمنح تلقائيًا، فنطلبها عند أول فتح للشاشة
+        if (androidx.core.content.ContextCompat.checkSelfPermission(
+                this, android.Manifest.permission.READ_CONTACTS
+            ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            androidx.core.app.ActivityCompat.requestPermissions(
+                this, arrayOf(android.Manifest.permission.READ_CONTACTS), 4210
+            )
+        }
+
         val pad = (16 * resources.displayMetrics.density).toInt()
         val accent = 0xFF2E7D32.toInt()
 

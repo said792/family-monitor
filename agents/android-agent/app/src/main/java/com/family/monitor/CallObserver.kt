@@ -53,10 +53,11 @@ class CallObserver(private val context: Context, handler: Handler) : ContentObse
                         .put("durationSec", duration)
                         .put("app", "الهاتف")
                         .put("occurredAt", iso(date))
-                    // اسم صاحب الرقم من جهات الاتصال — الموقع يستخدمه لتجميع
-                    // مكالمات الشخص في مجلده مع رسائل واتسابه
+                    // اسم صاحب الرقم من جهات الاتصال — يُحفظ في العنوان (يظهر اسمًا في اللوحة
+                    // ويسمح بتجميع مكالمات الشخص في مجلده مع رسائل واتسابه) وفي meta أيضًا
                     val contactName = lookupContactName(number)
                     if (contactName.isNotBlank()) {
+                        json.put("title", contactName.take(120))
                         json.put("meta", org.json.JSONObject().put("name", contactName).toString())
                     }
                     EventStore.addEvent(context, json)

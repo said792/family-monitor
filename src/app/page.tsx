@@ -10,6 +10,15 @@ import { EventsFeed } from "@/components/dashboard/events-feed";
 import { SettingsDialog } from "@/components/dashboard/settings-dialog";
 import { api, type DeviceInfo, type EventRow, type Stats } from "@/lib/client";
 
+const WA_PKGS = new Set([
+  "com.whatsapp", "com.whatsapp.w4b", "com.gbwhatsapp", "com.gbwhatsm",
+  "com.fmwhatsapp", "com.yowhatsapp", "com.whatsappplus", "com.wplus",
+]);
+const FB_PKGS = new Set([
+  "com.facebook.katana", "com.facebook.lite", "com.facebook.orca", "com.facebook.mlite",
+]);
+const SOCIAL_PKGS = new Set([...WA_PKGS, ...FB_PKGS]);
+
 export default function Page() {
   const [loadingSession, setLoadingSession] = useState(true);
   const [authed, setAuthed] = useState(false);
@@ -25,6 +34,11 @@ export default function Page() {
   const [query, setQuery] = useState("");
   const [live, setLive] = useState(true);
   const [loadingFeed, setLoadingFeed] = useState(false);
+  const feedOffsetRef = useRef(0);
+  const [feedHasMore, setFeedHasMore] = useState(false);
+  const [feedTotal, setFeedTotal] = useState(0);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
 
   const queryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -53,38 +67,41 @@ export default function Page() {
     };
   }, [query]);
 
-  const refreshFeed = useCallback(async () => {
+  const refreshFeed = useCallback(async (append = false) => {
     setLoadingFeed(true);
     try {
       const params = new URLSearchParams();
       if (selectedDeviceId) params.set("deviceId", selectedDeviceId);
       if (debouncedQuery) params.set("q", debouncedQuery);
-      if (typeFilter === "ALL") {
-        params.set("limit", "300");
-        const r = await api<{ events: EventRow[] }>(`/api/admin/events?${params}`);
-        setEvents(r.events);
-      } else if (typeFilter === "SEARCH_BROWSER") {
-        // نجلب نوعي البحث والتصفح معًا ثم ندمج ونرتب
-        const [searchRes, browserRes] = await Promise.all([
-          api<{ events: EventRow[] }>(`/api/admin/events?${params}&type=SEARCH&limit=150`),
-          api<{ events: EventRow[] }>(`/api/admin/events?${params}&type=BROWSER&limit=150`),
-        ]);
-        const merged = [...searchRes.events, ...browserRes.events]
-          .sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime())
-          .slice(0, 300);
-        setEvents(merged);
-      } else {
-        params.set("limit", "300");
-        params.set("type", typeFilter);
-        const r = await api<{ events: EventRow[] }>(`/api/admin/events?${params}`);
-        setEvents(r.events);
-      }
+      if (dateFrom) params.set("from", new Date(`${dateFrom}T00:00:00`).toISOString());
+      if (dateTo) params.set("to", new Date(`${dateTo}T23:59:59.999`).toISOString());
+      params.set("limit", "200");
+      params.set("offset", String(append ? feedOffsetRef.current : 0));
+
+      const typeMap: Record<string, string> = {
+        SEARCH_BROWSER: "SEARCH,BROWSER",
+        FACEBOOK: "MEDIA,APP",
+      };
+      if (typeFilter !== "ALL") params.set("types", typeMap[typeFilter] ?? typeFilter);
+      if (typeFilter === "APP") params.set("excludePackages", [...SOCIAL_PKGS].join(","));
+      if (typeFilter === "MEDIA") params.set("excludePackages", [...FB_PKGS].join(","));
+      if (typeFilter === "FACEBOOK") params.set("packages", [...FB_PKGS].join(","));
+
+      const r = await api<{ events: EventRow[]; total: number; hasMore: boolean; limit: number; offset: number }>(`/api/admin/events?${params}`);
+      setEvents((current) => {
+        if (!append) return r.events;
+        const seen = new Set(current.map((event) => event.id));
+        return [...current, ...r.events.filter((event) => !seen.has(event.id))];
+      });
+      feedOffsetRef.current = r.offset + r.events.length;
+      setFeedHasMore(r.hasMore);
+      setFeedTotal(r.total);
     } catch {
-      /* تجاهل أخطاء التحديث المؤقتة */
+      /* يبقى المحتوى الحالي ظاهرًا عند تعذر التحديث */
     } finally {
       setLoadingFeed(false);
     }
-  }, [selectedDeviceId, typeFilter, debouncedQuery]);
+  }, [selectedDeviceId, typeFilter, debouncedQuery, dateFrom, dateTo]);
 
   const refreshAll = useCallback(async () => {
     try {
@@ -102,7 +119,7 @@ export default function Page() {
   // تحديث عند تغيير الفلاتر
   useEffect(() => {
     if (!authed) return;
-    refreshFeed();
+    refreshFeed(false);
   }, [authed, refreshFeed]);
 
   // التحديث المباشر كل 5 ثوانٍ — يتوقف مؤقتًا أثناء مرور المؤشر فوق القائمة
@@ -112,7 +129,7 @@ export default function Page() {
     const id = setInterval(() => {
       if (feedHoverRef.current) return;
       refreshAll();
-      if (live) refreshFeed();
+      if (live) refreshFeed(false);
     }, 5000);
     return () => clearInterval(id);
   }, [authed, live, refreshAll, refreshFeed]);
@@ -158,6 +175,12 @@ export default function Page() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <span
+              className="text-[10px] text-emerald-300 bg-slate-800 border border-slate-700 rounded-full px-2 py-1 hidden sm:inline"
+              title="إصدار كود اللوحة — لو مش ظاهرة يبقى الكود لم يُرفع على GitHub/Vercel بعد"
+            >
+              اللوحة v2.5.2
+            </span>
             <Button
               variant="ghost"
               size="sm"
@@ -211,7 +234,14 @@ export default function Page() {
             live={live}
             onLive={setLive}
             loading={loadingFeed}
-            onRefresh={refreshFeed}
+            onRefresh={() => refreshFeed(false)}
+            onLoadMore={() => refreshFeed(true)}
+            hasMore={feedHasMore}
+            total={feedTotal}
+            dateFrom={dateFrom}
+            dateTo={dateTo}
+            onDateFrom={setDateFrom}
+            onDateTo={setDateTo}
             onHoverChange={(h) => {
               feedHoverRef.current = h;
             }}
@@ -232,7 +262,7 @@ export default function Page() {
         devices={devices}
         onChanged={() => {
           refreshAll();
-          refreshFeed();
+          refreshFeed(false);
         }}
       />
     </div>

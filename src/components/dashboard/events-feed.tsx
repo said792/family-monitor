@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import {
   Search, Globe, Phone, Grid3X3, EyeOff, ArrowDownLeft, ArrowUpRight, PhoneMissed,
   MessageCircle, Loader2, RefreshCw, ChevronDown, List, MessagesSquare, Trash2,
+  Send, Video,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -33,6 +34,8 @@ const TYPE_LABELS: Record<string, string> = {
   CALL: "مكالمة",
   APP: "تطبيق",
   WHATSAPP: "واتساب",
+  MESSENGER: "ماسنجر",
+  MEDIA: "فيديو",
 };
 
 const TABS = [
@@ -41,19 +44,27 @@ const TABS = [
   { value: "CALL", label: "مكالمات" },
   { value: "APP", label: "تطبيقات" },
   { value: "WHATSAPP", label: "واتساب" },
+  { value: "FACEBOOK", label: "فيسبوك" },
+  { value: "MESSENGER", label: "ماسنجر" },
+  { value: "MEDIA", label: "فيديوهات" },
 ];
 
 const GROUP_TYPES: Record<string, string> = {
   WHATSAPP: "واتساب",
+  MESSENGER: "ماسنجر",
+  FACEBOOK: "فيسبوك",
   CALL: "مكالمات",
   APP: "تطبيقات",
+  MEDIA: "فيديوهات ومحتوى",
   SEARCH_BROWSER: "بحث وتصفح",
 };
 
 const AVATAR_STYLES: Record<string, string> = {
   WHATSAPP: "bg-emerald-100 text-emerald-700",
+  MESSENGER: "bg-blue-100 text-blue-700",
   CALL: "bg-rose-100 text-rose-700",
   APP: "bg-violet-100 text-violet-700",
+  MEDIA: "bg-fuchsia-100 text-fuchsia-700",
   SEARCH_BROWSER: "bg-sky-100 text-sky-700",
 };
 
@@ -63,10 +74,12 @@ const ICON_STYLES: Record<string, string> = {
   CALL: "bg-rose-100 text-rose-700",
   APP: "bg-violet-100 text-violet-700",
   WHATSAPP: "bg-emerald-100 text-emerald-700",
+  MESSENGER: "bg-blue-100 text-blue-700",
+  MEDIA: "bg-fuchsia-100 text-fuchsia-700",
 };
 
-// أولوية لون المجلد عند دمج أكثر من نوع (واتساب ثم المكالمات ثم ...)
-const TYPE_PRIORITY = ["WHATSAPP", "CALL", "APP", "SEARCH_BROWSER", "SEARCH", "BROWSER"];
+// أولوية لون المجلد عند دمج أكثر من نوع (واتساب ثم ماسنجر ثم المكالمات ثم ...)
+const TYPE_PRIORITY = ["WHATSAPP", "MESSENGER", "CALL", "APP", "MEDIA", "SEARCH_BROWSER", "SEARCH", "BROWSER"];
 
 // ---------- أدوات مساعدة ----------
 
@@ -120,17 +133,18 @@ function detailText(ev: EventRow): string {
       ev.direction === "INCOMING" ? "مكالمة واردة" : ev.direction === "MISSED" ? "مكالمة فائتة" : "مكالمة صادرة";
     return `${dir}${ev.app ? ` — ${ev.app}` : ""}`;
   }
-  if (ev.type === "WHATSAPP") {
+  if (ev.type === "WHATSAPP" || ev.type === "MESSENGER") {
     const m = whatsMeta(ev.meta);
     const body = m.text ?? "";
     if (m.group && m.sender && ev.title && m.sender !== ev.title) return `${m.sender}: ${body}`;
     return body;
   }
+  if (ev.type === "MEDIA") return ev.app ? `مشاهدة — ${ev.app}` : "مشاهدة";
   return ev.url ? prettyUrl(ev.url) : ev.packageName ?? ev.app ?? "";
 }
 
 /** مفتاح واسم المجموعة التي ينتمي إليها الحدث */
-function groupOf(ev: EventRow): { key: string; type: string; label: string } {
+function groupOf(ev: EventRow): { key: string; type: string; label: string; phone?: string } {
   switch (ev.type) {
     case "WHATSAPP":
       return {
@@ -138,10 +152,23 @@ function groupOf(ev: EventRow): { key: string; type: string; label: string } {
         type: "WHATSAPP",
         label: ev.title || "غير معروف",
       };
+    case "MESSENGER":
+      return {
+        key: `MES|${ev.deviceId}|${ev.title ?? "غير معروف"}`,
+        type: "MESSENGER",
+        label: ev.title || "غير معروف",
+      };
+    case "MEDIA":
+      return {
+        key: `MEDIA|${ev.deviceId}|${ev.title ?? "غير معروف"}`,
+        type: "MEDIA",
+        label: ev.title || "محتوى غير معروف",
+      };
     case "CALL": {
-      const name = callMetaName(ev.meta);
+      // الاسم أولاً (من العنوان أو meta) والرقم يظهر بجانبه في رأس المجلد
+      const name = callMetaName(ev.meta) || ev.title || "";
       const label = name || ev.phone || "رقم غير معروف";
-      return { key: `CALL|${ev.deviceId}|${label}`, type: "CALL", label };
+      return { key: `CALL|${ev.deviceId}|${label}`, type: "CALL", label, phone: ev.phone ?? undefined };
     }
     case "APP":
       return {
@@ -171,6 +198,8 @@ interface EventGroup {
   key: string;
   type: string;
   label: string;
+  /** رقم الهاتف لمجموعات المكالمات — يظهر بجانب الاسم في رأس المجلد */
+  phone?: string;
   /** الأنواع الموجودة داخل المجلد (لعرض شارات متعددة عند الدمج) */
   types: string[];
   /** المجلد يخص موقعًا (للحذف بواسطة بادئة الرابط) */
@@ -208,6 +237,8 @@ function EventIcon({ ev }: { ev: EventRow }) {
   if (ev.type === "CALL") return <Phone className="w-4 h-4" />;
   if (ev.type === "APP") return <Grid3X3 className="w-4 h-4" />;
   if (ev.type === "WHATSAPP") return <MessageCircle className="w-4 h-4" />;
+  if (ev.type === "MESSENGER") return <Send className="w-4 h-4" />;
+  if (ev.type === "MEDIA") return <Video className="w-4 h-4" />;
   if (ev.type === "SEARCH") return <Search className="w-4 h-4" />;
   return <Globe className="w-4 h-4" />;
 }
@@ -215,7 +246,7 @@ function EventIcon({ ev }: { ev: EventRow }) {
 // ---------- عنصر داخل المحادثة/السلسلة ----------
 
 function ThreadItem({ ev, groupLabel }: { ev: EventRow; groupLabel: string }) {
-  const whats = ev.type === "WHATSAPP" ? whatsMeta(ev.meta) : null;
+  const whats = ev.type === "WHATSAPP" || ev.type === "MESSENGER" ? whatsMeta(ev.meta) : null;
   const isWeb = ev.type === "SEARCH" || ev.type === "BROWSER";
   const out = ev.direction === "OUTGOING";
 
@@ -230,6 +261,14 @@ function ThreadItem({ ev, groupLabel }: { ev: EventRow; groupLabel: string }) {
         {ev.type === "WHATSAPP" ? (
           <Badge variant="secondary" className="text-[10px] bg-emerald-50 text-emerald-700 shrink-0">
             واتساب
+          </Badge>
+        ) : ev.type === "MESSENGER" ? (
+          <Badge variant="secondary" className="text-[10px] bg-blue-50 text-blue-700 shrink-0">
+            ماسنجر
+          </Badge>
+        ) : ev.type === "MEDIA" ? (
+          <Badge variant="secondary" className="text-[10px] bg-fuchsia-50 text-fuchsia-700 shrink-0">
+            <Video className="w-3 h-3" /> فيديو
           </Badge>
         ) : ev.type === "CALL" ? (
           <Badge variant="secondary" className="text-[10px] bg-rose-50 text-rose-700 shrink-0">
@@ -258,6 +297,9 @@ function ThreadItem({ ev, groupLabel }: { ev: EventRow; groupLabel: string }) {
         {ev.type === "CALL" && ev.durationSec != null && ev.durationSec > 0 && (
           <span className="text-[11px] text-slate-500">{formatDuration(ev.durationSec)}</span>
         )}
+        {ev.type === "MEDIA" && ev.app && ev.app !== groupLabel && (
+          <span className="text-[11px] text-slate-500 shrink-0">{ev.app}</span>
+        )}
         <span className="text-[10px] text-slate-400 mr-auto shrink-0">
           {formatDateTime(ev.occurredAt)} · {formatClock(ev.occurredAt)}
         </span>
@@ -285,7 +327,7 @@ function ThreadItem({ ev, groupLabel }: { ev: EventRow; groupLabel: string }) {
         </a>
       ) : (
         <p className="text-xs text-slate-700 mt-1 whitespace-pre-wrap break-words" dir="auto">
-          {ev.type === "WHATSAPP"
+          {ev.type === "WHATSAPP" || ev.type === "MESSENGER"
             ? (whats?.text ?? "—")
             : ev.type === "APP"
               ? `${ev.app ?? ev.packageName ?? ""} — تم فتح التطبيق`
@@ -363,6 +405,11 @@ function GroupRow({
             <span className="text-sm font-semibold text-slate-800 break-all" dir="auto">
               {group.label}
             </span>
+            {group.phone && group.phone !== group.label && (
+              <span className="text-[11px] text-slate-400 break-all" dir="ltr">
+                {group.phone}
+              </span>
+            )}
             <Badge variant="secondary" className="text-[10px] bg-slate-100 text-slate-600 shrink-0">
               {group.events.length} {group.events.length === 1 ? "حدث" : "أحداث"}
             </Badge>
@@ -405,7 +452,7 @@ function GroupRow({
 // ---------- الصف القديم (عرض القائمة المسطحة) ----------
 
 function FlatRow({ ev }: { ev: EventRow }) {
-  const whats = ev.type === "WHATSAPP" ? whatsMeta(ev.meta) : null;
+  const whats = ev.type === "WHATSAPP" || ev.type === "MESSENGER" ? whatsMeta(ev.meta) : null;
   const isWeb = ev.type === "SEARCH" || ev.type === "BROWSER";
   return (
     <div className="px-4 py-3 flex items-start gap-3 hover:bg-slate-50/70 transition-colors">
@@ -458,7 +505,7 @@ function FlatRow({ ev }: { ev: EventRow }) {
 
         <p className="text-[11px] text-slate-400 mt-0.5">
           {ev.device.name} · {formatDateTime(ev.occurredAt)} · {formatClock(ev.occurredAt)}
-          {ev.type === "WHATSAPP" && ev.app ? ` · ${ev.app}` : ""}
+          {(ev.type === "WHATSAPP" || ev.type === "MESSENGER") && ev.app ? ` · ${ev.app}` : ""}
         </p>
       </div>
     </div>
@@ -478,6 +525,13 @@ export function EventsFeed({
   onLive,
   loading,
   onRefresh,
+  onLoadMore,
+  hasMore,
+  total,
+  dateFrom,
+  dateTo,
+  onDateFrom,
+  onDateTo,
   onHoverChange,
 }: {
   events: EventRow[];
@@ -490,6 +544,13 @@ export function EventsFeed({
   onLive: (v: boolean) => void;
   loading: boolean;
   onRefresh: () => void;
+  onLoadMore: () => void;
+  hasMore: boolean;
+  total: number;
+  dateFrom: string;
+  dateTo: string;
+  onDateFrom: (value: string) => void;
+  onDateTo: (value: string) => void;
   onHoverChange?: (hovering: boolean) => void;
 }) {
   // وضع العرض: مجمّع (مجلد لكل شخص/رقم/تطبيق/موقع) أو قائمة مسطحة
@@ -510,7 +571,7 @@ export function EventsFeed({
       const g = groupOf(ev);
       let grp = map.get(g.key);
       if (!grp) {
-        grp = { key: g.key, type: g.type, label: g.label, types: [g.type], domainGroup: false, events: [] };
+        grp = { key: g.key, type: g.type, label: g.label, phone: g.phone, types: [g.type], domainGroup: false, events: [] };
         map.set(g.key, grp);
       }
       grp.events.push(ev);
@@ -566,6 +627,8 @@ export function EventsFeed({
     const targets: Record<string, unknown>[] = [];
     const numeric = group.label.match(/\d{7,}/)?.[0];
     if (types.includes("WHATSAPP")) targets.push({ deviceId: dev, type: "WHATSAPP", title: group.label });
+    if (types.includes("MESSENGER")) targets.push({ deviceId: dev, type: "MESSENGER", title: group.label });
+    if (types.includes("MEDIA")) targets.push({ deviceId: dev, type: "MEDIA", title: group.label });
     if (types.includes("CALL") && numeric) targets.push({ deviceId: dev, type: "CALL", phone: group.label });
     if (types.includes("APP")) {
       targets.push({ deviceId: dev, type: "APP", app: group.label });
@@ -592,18 +655,8 @@ export function EventsFeed({
       } else if (confirmDel.kind === "group") {
         payload = groupDeletePayload(confirmDel.group);
       } else {
-        // «حذف السجلات المعروضة»: الجهاز المختار (أو كل الأجهزة) × تبويب العرض الحالي
-        const types =
-          typeFilter === "ALL"
-            ? null
-            : typeFilter === "SEARCH_BROWSER"
-              ? ["SEARCH", "BROWSER"]
-              : [typeFilter];
-        const devs = devices.length > 0 ? devices : [];
-        const targets = types
-          ? devs.flatMap((d) => types.map((t) => ({ deviceId: d.id, type: t })))
-          : devs.map((d) => ({ deviceId: d.id }));
-        payload = targets.length > 0 ? { targets } : { olderThanDays: 0 };
+        // «حذف السجلات المعروضة» يحذف فقط المعرفات التي تم تحميلها ومطابقتها للفلاتر الحالية.
+        payload = { ids: events.map((event) => event.id) };
       }
       const res = await fetch("/api/admin/events", {
         method: "DELETE",
@@ -634,10 +687,10 @@ export function EventsFeed({
     }
     const scope =
       typeFilter === "ALL" ? "كل الأنواع" : GROUP_TYPES[typeFilter] ?? TYPE_LABELS[typeFilter] ?? typeFilter;
-    const dev = devices.length === 1 ? `للجهاز «${devices[0].name}»` : "لكل الأجهزة";
+    const dev = "حسب اختيار الجهاز الحالي";
     return {
       title: "حذف السجلات المعروضة؟",
-      desc: `سيُحذف ${scope} ${dev} حسب التبويب الحالي. البحث لا يحدّد الحذف. لا يمكن التراجع.`,
+      desc: `سيُحذف ${events.length} سجلًا محمّلًا ومطابقًا للتبويب والفلاتر الحالية (${scope} ${dev}). السجلات الأقدم التي لم يتم تحميلها لن تُحذف. لا يمكن التراجع.`,
     };
   })();
 
@@ -704,14 +757,45 @@ export function EventsFeed({
             </Button>
           </div>
         </div>
-        <div className="pb-3 relative">
-          <Search className="absolute right-3 top-2.5 w-4 h-4 text-slate-400" />
+        <div className="pb-3 grid grid-cols-1 sm:grid-cols-[1fr_auto_auto_auto] gap-2 items-center">
+          <div className="relative">
+            <Search className="absolute right-3 top-2.5 w-4 h-4 text-slate-400" />
           <Input
             value={query}
             onChange={(e) => onQuery(e.target.value)}
             placeholder="ابحث في السجلات: كلمات البحث، المواقع، أرقام الهواتف، رسائل واتساب..."
             className="pr-9 h-9 text-sm bg-slate-50"
           />
+          </div>
+          <select
+            aria-label="الفترة الزمنية"
+            defaultValue="custom"
+            onChange={(e) => {
+              const value = e.target.value;
+              const end = new Date();
+              const start = new Date();
+              const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+              if (value === "all") { onDateFrom(""); onDateTo(""); }
+              else if (value === "today") { onDateFrom(fmt(start)); onDateTo(fmt(end)); }
+              else if (value === "yesterday") { start.setDate(start.getDate() - 1); onDateFrom(fmt(start)); onDateTo(fmt(start)); }
+              else if (value === "7") { start.setDate(start.getDate() - 6); onDateFrom(fmt(start)); onDateTo(fmt(end)); }
+              else if (value === "30") { start.setDate(start.getDate() - 29); onDateFrom(fmt(start)); onDateTo(fmt(end)); }
+            }}
+            className="h-9 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700"
+          >
+            <option value="custom">فترة مخصصة</option>
+            <option value="all">كل التواريخ</option>
+            <option value="today">اليوم</option>
+            <option value="yesterday">أمس</option>
+            <option value="7">آخر 7 أيام</option>
+            <option value="30">آخر 30 يومًا</option>
+          </select>
+          <label className="flex items-center gap-2 text-xs text-slate-500 whitespace-nowrap">
+            من <input aria-label="من تاريخ" type="date" value={dateFrom} max={dateTo || undefined} onChange={(e) => onDateFrom(e.target.value)} className="h-9 rounded-md border border-slate-200 px-2 text-slate-700" />
+          </label>
+          <label className="flex items-center gap-2 text-xs text-slate-500 whitespace-nowrap">
+            إلى <input aria-label="إلى تاريخ" type="date" value={dateTo} min={dateFrom || undefined} onChange={(e) => onDateTo(e.target.value)} className="h-9 rounded-md border border-slate-200 px-2 text-slate-700" />
+          </label>
         </div>
       </div>
 
@@ -721,7 +805,7 @@ export function EventsFeed({
         onMouseEnter={() => onHoverChange?.(true)}
         onMouseLeave={() => onHoverChange?.(false)}
       >
-        <ScrollArea className="max-h-[480px]">
+        <ScrollArea className="h-[65vh] min-h-[320px] max-h-[900px]">
           {events.length === 0 ? (
             <div className="p-10 text-center text-sm text-slate-500">
               لا توجد سجلات مطابقة — عند نشاط أي جهاز فرعي ستظهر الأحداث هنا فورًا.
@@ -746,12 +830,20 @@ export function EventsFeed({
             </div>
           )}
         </ScrollArea>
+        {hasMore && (
+          <div className="border-t border-slate-100 p-3 text-center">
+            <Button variant="outline" size="sm" onClick={onLoadMore} disabled={loading} className="min-w-36">
+              {loading ? <Loader2 className="w-4 h-4 ml-2 animate-spin" /> : null}
+              تحميل سجلات أقدم
+            </Button>
+          </div>
+        )}
       </div>
       {events.length > 0 && (
         <div className="px-4 py-2 border-t border-slate-100 text-[11px] text-slate-400">
           {mode === "grouped"
-            ? `${events.length} حدث مجمّعة في ${groups.length} مجلد — كل شخص/رقم في مجلد واحد يجمع واتسابه ومكالماته، اضغط عليه لعرض المحتوى.`
-            : `آخر ${events.length} حدث — الأحداث تُسجل لحظة حدوثها على الجهاز الفرعي.`}
+            ? `${events.length} حدث مجمّعة في ${groups.length} مجلد — كل شخص/رقم في مجلد واحد يجمع واتسابه وماسنجره ومكالماته، وكل فيديو/ريلز بمجلد بمرات دخوله. اضغط على أي مجلد لعرض المحتوى.`
+            : `تم تحميل ${events.length} من إجمالي ${total} سجل مطابق للفلاتر الحالية.`}
         </div>
       )}
 

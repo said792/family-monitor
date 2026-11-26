@@ -1,6 +1,7 @@
 // أنواع البيانات ودوال الاتصال بالـ API (جهة العميل)
 
-export type EventType = "SEARCH" | "BROWSER" | "CALL" | "APP" | "WHATSAPP";
+import type { EventType } from "@/lib/event-types";
+export type { EventType } from "@/lib/event-types";
 
 export interface DeviceInfo {
   id: string;
