@@ -29,6 +29,16 @@ export default function Page() {
   const queryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [debouncedQuery, setDebouncedQuery] = useState("");
 
+  // حزم تطبيقات المحادثة والفيسبوك — كل واحد له تبويبه الخاص، فنستثنيها من «تطبيقات»
+  const WA_PKGS = new Set([
+    "com.whatsapp", "com.whatsapp.w4b", "com.gbwhatsapp", "com.gbwhatsm",
+    "com.fmwhatsapp", "com.yowhatsapp", "com.whatsappplus", "com.wplus",
+  ]);
+  const FB_PKGS = new Set([
+    "com.facebook.katana", "com.facebook.lite", "com.facebook.orca", "com.facebook.mlite",
+  ]);
+  const SOCIAL_PKGS = new Set([...WA_PKGS, ...FB_PKGS]);
+
   // أثناء مرور المؤشر فوق قائمة السجلات نوقف التحديث المباشر مؤقتًا
   // حتى لا تختفي الرابط/التفاصيل التي يشير إليها المؤشر
   const feedHoverRef = useRef(false);
@@ -60,24 +70,43 @@ export default function Page() {
       if (selectedDeviceId) params.set("deviceId", selectedDeviceId);
       if (debouncedQuery) params.set("q", debouncedQuery);
       if (typeFilter === "ALL") {
-        params.set("limit", "300");
+        params.set("limit", "1000");
         const r = await api<{ events: EventRow[] }>(`/api/admin/events?${params}`);
         setEvents(r.events);
       } else if (typeFilter === "SEARCH_BROWSER") {
         // نجلب نوعي البحث والتصفح معًا ثم ندمج ونرتب
         const [searchRes, browserRes] = await Promise.all([
-          api<{ events: EventRow[] }>(`/api/admin/events?${params}&type=SEARCH&limit=150`),
-          api<{ events: EventRow[] }>(`/api/admin/events?${params}&type=BROWSER&limit=150`),
+          api<{ events: EventRow[] }>(`/api/admin/events?${params}&type=SEARCH&limit=500`),
+          api<{ events: EventRow[] }>(`/api/admin/events?${params}&type=BROWSER&limit=500`),
         ]);
         const merged = [...searchRes.events, ...browserRes.events]
           .sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime())
-          .slice(0, 300);
+          .slice(0, 1000);
+        setEvents(merged);
+      } else if (typeFilter === "FACEBOOK") {
+        // فيسبوك: محتوى الريلز/الفيديوهات/الروابط + حركة فتح تطبيقات فيسبوك وماسنجر
+        const [mediaRes, appRes] = await Promise.all([
+          api<{ events: EventRow[] }>(`/api/admin/events?${params}&type=MEDIA&limit=500`),
+          api<{ events: EventRow[] }>(`/api/admin/events?${params}&type=APP&limit=500`),
+        ]);
+        const merged = [...mediaRes.events, ...appRes.events]
+          .filter((e) => FB_PKGS.has(e.packageName ?? ""))
+          .sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime())
+          .slice(0, 1000);
         setEvents(merged);
       } else {
-        params.set("limit", "300");
+        params.set("limit", "1000");
         params.set("type", typeFilter);
         const r = await api<{ events: EventRow[] }>(`/api/admin/events?${params}`);
-        setEvents(r.events);
+        if (typeFilter === "APP") {
+          // تبويب «تطبيقات» بدون حركة واتساب/فيسبوك/ماسنجر — لكل واحد تبويبه الخاص
+          setEvents(r.events.filter((e) => !SOCIAL_PKGS.has(e.packageName ?? "")));
+        } else if (typeFilter === "MEDIA") {
+          // تبويب «فيديوهات» لمحتوى غير فيسبوك (يوتيوب، تيك توك...) — فيسبوك له تبويبه
+          setEvents(r.events.filter((e) => !FB_PKGS.has(e.packageName ?? "")));
+        } else {
+          setEvents(r.events);
+        }
       }
     } catch {
       /* تجاهل أخطاء التحديث المؤقتة */
@@ -158,6 +187,12 @@ export default function Page() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <span
+              className="text-[10px] text-emerald-300 bg-slate-800 border border-slate-700 rounded-full px-2 py-1 hidden sm:inline"
+              title="إصدار كود اللوحة — لو مش ظاهرة يبقى الكود لم يُرفع على GitHub/Vercel بعد"
+            >
+              اللوحة v2.5.1
+            </span>
             <Button
               variant="ghost"
               size="sm"

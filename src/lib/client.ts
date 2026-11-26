@@ -1,7 +1,13 @@
 // أنواع البيانات ودوال الاتصال بالـ API (جهة العميل)
 
-export type EventType = "SEARCH" | "BROWSER" | "CALL" | "APP" | "WHATSAPP";
-
+export type EventType =
+  | "SEARCH"
+  | "BROWSER"
+  | "CALL"
+  | "APP"
+  | "WHATSAPP"
+  | "MESSENGER"
+  | "MEDIA";
 export interface DeviceInfo {
   id: string;
   name: string;

@@ -45,4 +45,17 @@ object Config {
         val p = pkg.lowercase()
         return p.contains("whats") || p.contains("gbwhats") || p.endsWith("waplus")
     }
+
+    /** عائلة فيسبوك: التطبيق الرئيسي + لايت + ماسنجر (لرصد الريلز والفيديوهات والروابط الداخلية) */
+    fun isFacebook(pkg: String): Boolean {
+        val p = pkg.lowercase()
+        return p == "com.facebook.katana" || p == "com.facebook.lite" ||
+            p == "com.facebook.orca" || p == "com.facebook.mlite"
+    }
+
+    /** تطبيقات ماسنجر — إشعارات محادثاتها تُرصد مثل واتساب */
+    fun isMessenger(pkg: String): Boolean {
+        val p = pkg.lowercase()
+        return p == "com.facebook.orca" || p == "com.facebook.mlite" || p == "com.facebook.lite"
+    }
 }

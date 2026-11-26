@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import { authenticateDevice, classifySearch } from "@/lib/auth";
 
 type IncomingEvent = {
-  type?: string; // SEARCH | BROWSER | CALL | APP | WHATSAPP (SEARCH سيتم استنتاجه تلقائيًا للروابط)
+  type?: string; // SEARCH | BROWSER | CALL | APP | WHATSAPP | MESSENGER | MEDIA
   title?: string;
   url?: string;
   app?: string;
@@ -70,7 +70,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    if (!["SEARCH", "BROWSER", "CALL", "APP", "WHATSAPP"].includes(type)) continue;
+    if (!["SEARCH", "BROWSER", "CALL", "APP", "WHATSAPP", "MESSENGER", "MEDIA"].includes(type)) continue;
 
     const occurredAt =
       typeof ev.occurredAt === "string" && !isNaN(Date.parse(ev.occurredAt))

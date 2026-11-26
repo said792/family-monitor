@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { verifySessionToken, SESSION_COOKIE } from "@/lib/auth";
 
-const TYPES = ["SEARCH", "BROWSER", "CALL", "APP", "WHATSAPP"] as const;
+const TYPES = ["SEARCH", "BROWSER", "CALL", "APP", "WHATSAPP", "MESSENGER", "MEDIA"] as const;
 
 export async function GET(req: NextRequest) {
   const token = req.cookies.get(SESSION_COOKIE)?.value;
@@ -14,7 +14,7 @@ export async function GET(req: NextRequest) {
   const deviceId = sp.get("deviceId") || undefined;
   const type = sp.get("type");
   const q = sp.get("q")?.trim();
-  const limit = Math.min(Number(sp.get("limit")) || 100, 500);
+  const limit = Math.min(Number(sp.get("limit")) || 300, 1000);
 
   const where: {
     deviceId?: string;

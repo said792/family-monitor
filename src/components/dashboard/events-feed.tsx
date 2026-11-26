@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import {
   Search, Globe, Phone, Grid3X3, EyeOff, ArrowDownLeft, ArrowUpRight, PhoneMissed,
   MessageCircle, Loader2, RefreshCw, ChevronDown, List, MessagesSquare, Trash2,
+  Send, Video,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -33,6 +34,8 @@ const TYPE_LABELS: Record<string, string> = {
   CALL: "مكالمة",
   APP: "تطبيق",
   WHATSAPP: "واتساب",
+  MESSENGER: "ماسنجر",
+  MEDIA: "فيديو",
 };
 
 const TABS = [
@@ -41,19 +44,27 @@ const TABS = [
   { value: "CALL", label: "مكالمات" },
   { value: "APP", label: "تطبيقات" },
   { value: "WHATSAPP", label: "واتساب" },
+  { value: "FACEBOOK", label: "فيسبوك" },
+  { value: "MESSENGER", label: "ماسنجر" },
+  { value: "MEDIA", label: "فيديوهات" },
 ];
 
 const GROUP_TYPES: Record<string, string> = {
   WHATSAPP: "واتساب",
+  MESSENGER: "ماسنجر",
+  FACEBOOK: "فيسبوك",
   CALL: "مكالمات",
   APP: "تطبيقات",
+  MEDIA: "فيديوهات ومحتوى",
   SEARCH_BROWSER: "بحث وتصفح",
 };
 
 const AVATAR_STYLES: Record<string, string> = {
   WHATSAPP: "bg-emerald-100 text-emerald-700",
+  MESSENGER: "bg-blue-100 text-blue-700",
   CALL: "bg-rose-100 text-rose-700",
   APP: "bg-violet-100 text-violet-700",
+  MEDIA: "bg-fuchsia-100 text-fuchsia-700",
   SEARCH_BROWSER: "bg-sky-100 text-sky-700",
 };
 
@@ -63,10 +74,12 @@ const ICON_STYLES: Record<string, string> = {
   CALL: "bg-rose-100 text-rose-700",
   APP: "bg-violet-100 text-violet-700",
   WHATSAPP: "bg-emerald-100 text-emerald-700",
+  MESSENGER: "bg-blue-100 text-blue-700",
+  MEDIA: "bg-fuchsia-100 text-fuchsia-700",
 };
 
-// أولوية لون المجلد عند دمج أكثر من نوع (واتساب ثم المكالمات ثم ...)
-const TYPE_PRIORITY = ["WHATSAPP", "CALL", "APP", "SEARCH_BROWSER", "SEARCH", "BROWSER"];
+// أولوية لون المجلد عند دمج أكثر من نوع (واتساب ثم ماسنجر ثم المكالمات ثم ...)
+const TYPE_PRIORITY = ["WHATSAPP", "MESSENGER", "CALL", "APP", "MEDIA", "SEARCH_BROWSER", "SEARCH", "BROWSER"];
 
 // ---------- أدوات مساعدة ----------
 
@@ -120,17 +133,18 @@ function detailText(ev: EventRow): string {
       ev.direction === "INCOMING" ? "مكالمة واردة" : ev.direction === "MISSED" ? "مكالمة فائتة" : "مكالمة صادرة";
     return `${dir}${ev.app ? ` — ${ev.app}` : ""}`;
   }
-  if (ev.type === "WHATSAPP") {
+  if (ev.type === "WHATSAPP" || ev.type === "MESSENGER") {
     const m = whatsMeta(ev.meta);
     const body = m.text ?? "";
     if (m.group && m.sender && ev.title && m.sender !== ev.title) return `${m.sender}: ${body}`;
     return body;
   }
+  if (ev.type === "MEDIA") return ev.app ? `مشاهدة — ${ev.app}` : "مشاهدة";
   return ev.url ? prettyUrl(ev.url) : ev.packageName ?? ev.app ?? "";
 }
 
 /** مفتاح واسم المجموعة التي ينتمي إليها الحدث */
-function groupOf(ev: EventRow): { key: string; type: string; label: string } {
+function groupOf(ev: EventRow): { key: string; type: string; label: string; phone?: string } {
   switch (ev.type) {
     case "WHATSAPP":
       return {
@@ -138,10 +152,23 @@ function groupOf(ev: EventRow): { key: string; type: string; label: string } {
         type: "WHATSAPP",
         label: ev.title || "غير معروف",
       };
+    case "MESSENGER":
+      return {
+        key: `MES|${ev.deviceId}|${ev.title ?? "غير معروف"}`,
+        type: "MESSENGER",
+        label: ev.title || "غير معروف",
+      };
+    case "MEDIA":
+      return {
+        key: `MEDIA|${ev.deviceId}|${ev.title ?? "غير معروف"}`,
+        type: "MEDIA",
+        label: ev.title || "محتوى غير معروف",
+      };
     case "CALL": {
-      const name = callMetaName(ev.meta);
+      // الاسم أولاً (من العنوان أو meta) والرقم يظهر بجانبه في رأس المجلد
+      const name = callMetaName(ev.meta) || ev.title || "";
       const label = name || ev.phone || "رقم غير معروف";
-      return { key: `CALL|${ev.deviceId}|${label}`, type: "CALL", label };
+      return { key: `CALL|${ev.deviceId}|${label}`, type: "CALL", label, phone: ev.phone ?? undefined };
     }
     case "APP":
       return {
@@ -171,6 +198,8 @@ interface EventGroup {
   key: string;
   type: string;
   label: string;
+  /** رقم الهاتف لمجموعات المكالمات — يظهر بجانب الاسم في رأس المجلد */
+  phone?: string;
   /** الأنواع الموجودة داخل المجلد (لعرض شارات متعددة عند الدمج) */
   types: string[];
   /** المجلد يخص موقعًا (للحذف بواسطة بادئة الرابط) */
@@ -208,6 +237,8 @@ function EventIcon({ ev }: { ev: EventRow }) {
   if (ev.type === "CALL") return <Phone className="w-4 h-4" />;
   if (ev.type === "APP") return <Grid3X3 className="w-4 h-4" />;
   if (ev.type === "WHATSAPP") return <MessageCircle className="w-4 h-4" />;
+  if (ev.type === "MESSENGER") return <Send className="w-4 h-4" />;
+  if (ev.type === "MEDIA") return <Video className="w-4 h-4" />;
   if (ev.type === "SEARCH") return <Search className="w-4 h-4" />;
   return <Globe className="w-4 h-4" />;
 }
@@ -215,7 +246,7 @@ function EventIcon({ ev }: { ev: EventRow }) {
 // ---------- عنصر داخل المحادثة/السلسلة ----------
 
 function ThreadItem({ ev, groupLabel }: { ev: EventRow; groupLabel: string }) {
-  const whats = ev.type === "WHATSAPP" ? whatsMeta(ev.meta) : null;
+  const whats = ev.type === "WHATSAPP" || ev.type === "MESSENGER" ? whatsMeta(ev.meta) : null;
   const isWeb = ev.type === "SEARCH" || ev.type === "BROWSER";
   const out = ev.direction === "OUTGOING";
 
@@ -230,6 +261,14 @@ function ThreadItem({ ev, groupLabel }: { ev: EventRow; groupLabel: string }) {
         {ev.type === "WHATSAPP" ? (
           <Badge variant="secondary" className="text-[10px] bg-emerald-50 text-emerald-700 shrink-0">
             واتساب
+          </Badge>
+        ) : ev.type === "MESSENGER" ? (
+          <Badge variant="secondary" className="text-[10px] bg-blue-50 text-blue-700 shrink-0">
+            ماسنجر
+          </Badge>
+        ) : ev.type === "MEDIA" ? (
+          <Badge variant="secondary" className="text-[10px] bg-fuchsia-50 text-fuchsia-700 shrink-0">
+            <Video className="w-3 h-3" /> فيديو
           </Badge>
         ) : ev.type === "CALL" ? (
           <Badge variant="secondary" className="text-[10px] bg-rose-50 text-rose-700 shrink-0">
@@ -258,6 +297,9 @@ function ThreadItem({ ev, groupLabel }: { ev: EventRow; groupLabel: string }) {
         {ev.type === "CALL" && ev.durationSec != null && ev.durationSec > 0 && (
           <span className="text-[11px] text-slate-500">{formatDuration(ev.durationSec)}</span>
         )}
+        {ev.type === "MEDIA" && ev.app && ev.app !== groupLabel && (
+          <span className="text-[11px] text-slate-500 shrink-0">{ev.app}</span>
+        )}
         <span className="text-[10px] text-slate-400 mr-auto shrink-0">
           {formatDateTime(ev.occurredAt)} · {formatClock(ev.occurredAt)}
         </span>
@@ -285,7 +327,7 @@ function ThreadItem({ ev, groupLabel }: { ev: EventRow; groupLabel: string }) {
         </a>
       ) : (
         <p className="text-xs text-slate-700 mt-1 whitespace-pre-wrap break-words" dir="auto">
-          {ev.type === "WHATSAPP"
+          {ev.type === "WHATSAPP" || ev.type === "MESSENGER"
             ? (whats?.text ?? "—")
             : ev.type === "APP"
               ? `${ev.app ?? ev.packageName ?? ""} — تم فتح التطبيق`
@@ -363,6 +405,11 @@ function GroupRow({
             <span className="text-sm font-semibold text-slate-800 break-all" dir="auto">
               {group.label}
             </span>
+            {group.phone && group.phone !== group.label && (
+              <span className="text-[11px] text-slate-400 break-all" dir="ltr">
+                {group.phone}
+              </span>
+            )}
             <Badge variant="secondary" className="text-[10px] bg-slate-100 text-slate-600 shrink-0">
               {group.events.length} {group.events.length === 1 ? "حدث" : "أحداث"}
             </Badge>
@@ -405,7 +452,7 @@ function GroupRow({
 // ---------- الصف القديم (عرض القائمة المسطحة) ----------
 
 function FlatRow({ ev }: { ev: EventRow }) {
-  const whats = ev.type === "WHATSAPP" ? whatsMeta(ev.meta) : null;
+  const whats = ev.type === "WHATSAPP" || ev.type === "MESSENGER" ? whatsMeta(ev.meta) : null;
   const isWeb = ev.type === "SEARCH" || ev.type === "BROWSER";
   return (
     <div className="px-4 py-3 flex items-start gap-3 hover:bg-slate-50/70 transition-colors">
@@ -458,7 +505,7 @@ function FlatRow({ ev }: { ev: EventRow }) {
 
         <p className="text-[11px] text-slate-400 mt-0.5">
           {ev.device.name} · {formatDateTime(ev.occurredAt)} · {formatClock(ev.occurredAt)}
-          {ev.type === "WHATSAPP" && ev.app ? ` · ${ev.app}` : ""}
+          {(ev.type === "WHATSAPP" || ev.type === "MESSENGER") && ev.app ? ` · ${ev.app}` : ""}
         </p>
       </div>
     </div>
@@ -510,7 +557,7 @@ export function EventsFeed({
       const g = groupOf(ev);
       let grp = map.get(g.key);
       if (!grp) {
-        grp = { key: g.key, type: g.type, label: g.label, types: [g.type], domainGroup: false, events: [] };
+        grp = { key: g.key, type: g.type, label: g.label, phone: g.phone, types: [g.type], domainGroup: false, events: [] };
         map.set(g.key, grp);
       }
       grp.events.push(ev);
@@ -566,6 +613,8 @@ export function EventsFeed({
     const targets: Record<string, unknown>[] = [];
     const numeric = group.label.match(/\d{7,}/)?.[0];
     if (types.includes("WHATSAPP")) targets.push({ deviceId: dev, type: "WHATSAPP", title: group.label });
+    if (types.includes("MESSENGER")) targets.push({ deviceId: dev, type: "MESSENGER", title: group.label });
+    if (types.includes("MEDIA")) targets.push({ deviceId: dev, type: "MEDIA", title: group.label });
     if (types.includes("CALL") && numeric) targets.push({ deviceId: dev, type: "CALL", phone: group.label });
     if (types.includes("APP")) {
       targets.push({ deviceId: dev, type: "APP", app: group.label });
@@ -598,7 +647,9 @@ export function EventsFeed({
             ? null
             : typeFilter === "SEARCH_BROWSER"
               ? ["SEARCH", "BROWSER"]
-              : [typeFilter];
+              : typeFilter === "FACEBOOK"
+                ? ["MEDIA"]
+                : [typeFilter];
         const devs = devices.length > 0 ? devices : [];
         const targets = types
           ? devs.flatMap((d) => types.map((t) => ({ deviceId: d.id, type: t })))
@@ -721,7 +772,7 @@ export function EventsFeed({
         onMouseEnter={() => onHoverChange?.(true)}
         onMouseLeave={() => onHoverChange?.(false)}
       >
-        <ScrollArea className="max-h-[480px]">
+        <ScrollArea className="max-h-[62vh] min-h-[320px]">
           {events.length === 0 ? (
             <div className="p-10 text-center text-sm text-slate-500">
               لا توجد سجلات مطابقة — عند نشاط أي جهاز فرعي ستظهر الأحداث هنا فورًا.
@@ -750,8 +801,8 @@ export function EventsFeed({
       {events.length > 0 && (
         <div className="px-4 py-2 border-t border-slate-100 text-[11px] text-slate-400">
           {mode === "grouped"
-            ? `${events.length} حدث مجمّعة في ${groups.length} مجلد — كل شخص/رقم في مجلد واحد يجمع واتسابه ومكالماته، اضغط عليه لعرض المحتوى.`
-            : `آخر ${events.length} حدث — الأحداث تُسجل لحظة حدوثها على الجهاز الفرعي.`}
+            ? `${events.length} حدث مجمّعة في ${groups.length} مجلد — كل شخص/رقم في مجلد واحد يجمع واتسابه وماسنجره ومكالماته، وكل فيديو/ريلز بمجلد بمرات دخوله. اضغط على أي مجلد لعرض المحتوى.`
+            : `آخر ${events.length} حدث — الأحداث تُسجل لحظة حدوثها على الجهاز الفرعي. تُعرض أحدث 1000 حدث لكل تبويب.`}
         </div>
       )}
 

