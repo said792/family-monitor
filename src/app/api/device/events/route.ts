@@ -78,6 +78,11 @@ export async function POST(req: NextRequest) {
         ? new Date(ev.occurredAt)
         : new Date();
 
+    const serializedMeta = ev.meta == null ? null : (JSON.stringify(ev.meta) ?? null);
+    // لا نقص JSON في منتصفه؛ ذلك كان يحوّل meta إلى نص غير قابل للتحليل
+    // ويؤدي لاختفاء نص الرسالة في لوحة المتابعة.
+    if (serializedMeta && serializedMeta.length > 20_000) continue;
+
     rows.push({
       deviceId: device.id,
       type,
@@ -93,7 +98,7 @@ export async function POST(req: NextRequest) {
       durationSec: typeof ev.durationSec === "number" && ev.durationSec >= 0 ? Math.round(ev.durationSec) : null,
       incognito: ev.incognito === true,
       occurredAt,
-      meta: ev.meta ? JSON.stringify(ev.meta).slice(0, 4000) : null,
+      meta: serializedMeta,
     });
   }
 

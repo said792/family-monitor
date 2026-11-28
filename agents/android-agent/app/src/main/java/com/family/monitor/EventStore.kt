@@ -19,12 +19,17 @@ object EventStore {
     fun addEvent(ctx: Context, ev: JSONObject) {
         val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val arr = JSONArray(prefs.getString(KEY_QUEUE, "[]") ?: "[]")
-        // منع التكرار خلال 15 ثانية
-        val fp = fingerprint(ev)
-        val now = System.currentTimeMillis()
-        fingerprints.entries.removeAll { it.value < now - 15_000 }
-        if (fingerprints.containsKey(fp)) return
-        fingerprints[fp] = now
+        // مصادر الرسائل نفسها تطبق منع التكرار اعتمادًا على معرّف/وقت الرسالة.
+        // لا نمنع رسالتين متطابقتين هنا؛ فقد يرسل المستخدم النص نفسه مرتين عمدًا.
+        val isMessage = ev.optString("type") == "WHATSAPP" ||
+            ev.optString("type") == "MESSENGER"
+        if (!isMessage) {
+            val fp = fingerprint(ev)
+            val now = System.currentTimeMillis()
+            fingerprints.entries.removeAll { it.value < now - 15_000 }
+            if (fingerprints.containsKey(fp)) return
+            fingerprints[fp] = now
+        }
 
         ev.put("occurredAt", isoNow())
         arr.put(ev)

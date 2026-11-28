@@ -136,6 +136,8 @@ function detailText(ev: EventRow): string {
   if (ev.type === "WHATSAPP" || ev.type === "MESSENGER") {
     const m = whatsMeta(ev.meta);
     const body = m.text ?? "";
+    // سجلات قديمة حُفظت قبل إصلاح حقل meta: نصها غير قابل للاستعادة — نوضح ذلك بدل فراغ
+    if (!body) return "بدون نص محفوظ — سجل قديم من قبل إصلاح الحفظ (الرسائل الجديدة تظهر نصها)";
     if (m.group && m.sender && ev.title && m.sender !== ev.title) return `${m.sender}: ${body}`;
     return body;
   }
